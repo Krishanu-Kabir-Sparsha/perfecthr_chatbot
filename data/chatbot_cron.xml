@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<odoo>
+    <data noupdate="1">
+
+        <!-- ═══════════════════════════════════════════════════════
+             Scheduled Actions (Cron Jobs)
+             ═══════════════════════════════════════════════════════ -->
+
+        <!-- Daily Analytics Computation -->
+        <record id="cron_chatbot_analytics_daily" model="ir.cron">
+            <field name="name">AI Chatbot: Compute Daily Analytics</field>
+            <field name="model_id" ref="model_perfecthr_chatbot_analytics"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_compute_daily()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">days</field>
+            <field name="active">True</field>
+            <field name="priority">15</field>
+        </record>
+
+        <!-- Auto-Embed Knowledge Articles -->
+        <record id="cron_chatbot_auto_embed" model="ir.cron">
+            <field name="name">AI Chatbot: Auto-Embed Knowledge Articles</field>
+            <field name="model_id" ref="model_perfecthr_chatbot_knowledge"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_auto_embed()</field>
+            <field name="interval_number">4</field>
+            <field name="interval_type">hours</field>
+            <field name="active">True</field>
+            <field name="priority">20</field>
+        </record>
+
+        <!-- Close Stale Sessions -->
+        <record id="cron_chatbot_close_stale" model="ir.cron">
+            <field name="name">AI Chatbot: Close Stale Sessions</field>
+            <field name="model_id" ref="model_perfecthr_chatbot_session"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_close_stale_sessions()</field>
+            <field name="interval_number">6</field>
+            <field name="interval_type">hours</field>
+            <field name="active">True</field>
+            <field name="priority">25</field>
+        </record>
+
+    </data>
+</odoo>

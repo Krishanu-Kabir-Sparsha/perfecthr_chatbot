@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<odoo>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Top Level Menu: AI Chatbot
+         ═══════════════════════════════════════════════════════════ -->
+    <menuitem id="menu_chatbot_root"
+              name="AI Chatbot"
+              web_icon="perfecthr_chatbot,static/description/icon.png"
+              sequence="95"/>
+
+    <!-- ── Sessions ────────────────────────────────────────────── -->
+    <menuitem id="menu_chatbot_sessions_parent"
+              name="Sessions"
+              parent="menu_chatbot_root"
+              sequence="10"/>
+
+    <menuitem id="menu_chatbot_sessions"
+              name="Chat Sessions"
+              parent="menu_chatbot_sessions_parent"
+              action="action_chatbot_session"
+              sequence="10"/>
+
+    <!-- ── Knowledge Base ──────────────────────────────────────── -->
+    <menuitem id="menu_chatbot_knowledge_parent"
+              name="Knowledge Base"
+              parent="menu_chatbot_root"
+              sequence="20"/>
+
+    <menuitem id="menu_chatbot_knowledge"
+              name="Articles"
+              parent="menu_chatbot_knowledge_parent"
+              action="action_chatbot_knowledge"
+              sequence="10"/>
+
+    <!-- ── Analytics ───────────────────────────────────────────── -->
+    <menuitem id="menu_chatbot_analytics_parent"
+              name="Analytics"
+              parent="menu_chatbot_root"
+              sequence="30"/>
+
+    <menuitem id="menu_chatbot_analytics"
+              name="Dashboard"
+              parent="menu_chatbot_analytics_parent"
+              action="action_chatbot_analytics"
+              sequence="10"/>
+
+    <!-- ── Configuration ───────────────────────────────────────── -->
+    <menuitem id="menu_chatbot_config_parent"
+              name="Configuration"
+              parent="menu_chatbot_root"
+              groups="perfecthr_chatbot.group_chatbot_admin"
+              sequence="90"/>
+
+    <menuitem id="menu_chatbot_config"
+              name="Settings"
+              parent="menu_chatbot_config_parent"
+              action="action_chatbot_config"
+              sequence="10"/>
+
+</odoo>

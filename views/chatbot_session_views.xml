@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<odoo>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Session Tree View
+         ═══════════════════════════════════════════════════════════ -->
+    <record id="view_chatbot_session_tree" model="ir.ui.view">
+        <field name="name">perfecthr.chatbot.session.tree</field>
+        <field name="model">perfecthr.chatbot.session</field>
+        <field name="arch" type="xml">
+            <list string="Chatbot Sessions"
+                  decoration-success="state == 'active'"
+                  decoration-warning="state == 'escalated'"
+                  decoration-muted="state == 'closed'">
+                <field name="display_name" string="Session"/>
+                <field name="visitor_name"/>
+                <field name="visitor_email"/>
+                <field name="visitor_company"/>
+                <field name="state"
+                       decoration-success="state == 'active'"
+                       decoration-warning="state == 'escalated'"
+                       decoration-muted="state == 'closed'"
+                       widget="badge"/>
+                <field name="message_count" string="Messages"/>
+                <field name="qualification_score" string="Score"/>
+                <field name="is_qualified" widget="boolean_toggle"/>
+                <field name="lead_id"/>
+                <field name="start_time"/>
+                <field name="duration_minutes" widget="float_time"/>
+                <field name="source" widget="badge"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Session Form View
+         ═══════════════════════════════════════════════════════════ -->
+    <record id="view_chatbot_session_form" model="ir.ui.view">
+        <field name="name">perfecthr.chatbot.session.form</field>
+        <field name="model">perfecthr.chatbot.session</field>
+        <field name="arch" type="xml">
+            <form string="Chatbot Session">
+                <header>
+                    <button name="action_escalate" string="Escalate"
+                            type="object" class="btn-warning"
+                            invisible="state != 'active'"/>
+                    <button name="action_close" string="Close Session"
+                            type="object" class="btn-secondary"
+                            invisible="state != 'active'"/>
+                    <button name="action_view_lead" string="View Lead"
+                            type="object" class="btn-primary"
+                            invisible="not lead_id"/>
+                    <field name="state" widget="statusbar"
+                           statusbar_visible="active,closed,escalated"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="display_name" readonly="1"/>
+                        </h1>
+                    </div>
+
+                    <group>
+                        <group string="Visitor Information">
+                            <field name="visitor_name"/>
+                            <field name="visitor_email" widget="email"/>
+                            <field name="visitor_phone" widget="phone"/>
+                            <field name="visitor_company"/>
+                            <field name="visitor_employee_size"/>
+                        </group>
+                        <group string="Session Details">
+                            <field name="session_token" readonly="1"/>
+                            <field name="source"/>
+                            <field name="start_time"/>
+                            <field name="end_time"/>
+                            <field name="duration_minutes" widget="float_time"/>
+                            <field name="visitor_ip" readonly="1"/>
+                        </group>
+                    </group>
+
+                    <group>
+                        <group string="Lead Qualification">
+                            <field name="qualification_score"/>
+                            <field name="is_qualified"/>
+                            <field name="lead_id"/>
+                        </group>
+                        <group string="Statistics">
+                            <field name="message_count"/>
+                        </group>
+                    </group>
+
+                    <notebook>
+                        <page string="Chat Transcript" name="messages">
+                            <field name="message_ids" nolabel="1" readonly="1">
+                                  <list decoration-info="role == 'assistant'"
+                                      decoration-success="role == 'user'"
+                                      decoration-muted="role == 'system'">
+                                    <field name="timestamp"/>
+                                    <field name="role" widget="badge"/>
+                                    <field name="content"/>
+                                    <field name="intent"/>
+                                    <field name="confidence_score"
+                                           widget="progressbar"/>
+                                    <field name="model_used"/>
+                                    <field name="response_time_ms"/>
+                                    <field name="feedback" widget="badge"
+                                           optional="show"
+                                           decoration-success="feedback == 'positive'"
+                                           decoration-danger="feedback == 'negative'"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Session Search View
+         ═══════════════════════════════════════════════════════════ -->
+    <record id="view_chatbot_session_search" model="ir.ui.view">
+        <field name="name">perfecthr.chatbot.session.search</field>
+        <field name="model">perfecthr.chatbot.session</field>
+        <field name="arch" type="xml">
+            <search string="Search Sessions">
+                <field name="visitor_name"/>
+                <field name="visitor_email"/>
+                <field name="visitor_company"/>
+                <filter name="active" string="Active"
+                        domain="[('state', '=', 'active')]"/>
+                <filter name="escalated" string="Escalated"
+                        domain="[('state', '=', 'escalated')]"/>
+                <filter name="closed" string="Closed"
+                        domain="[('state', '=', 'closed')]"/>
+                <separator/>
+                <filter name="qualified" string="Qualified"
+                        domain="[('is_qualified', '=', True)]"/>
+                <filter name="with_lead" string="Has Lead"
+                        domain="[('lead_id', '!=', False)]"/>
+                <separator/>
+                <filter name="today" string="Today"
+                        domain="[('start_time', '>=', (context_today()).strftime('%%Y-%%m-%%d'))]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_state" string="State"
+                            context="{'group_by': 'state'}"/>
+                    <filter name="group_source" string="Source"
+                            context="{'group_by': 'source'}"/>
+                    <filter name="group_date" string="Date"
+                            context="{'group_by': 'start_time:day'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Session Action
+         ═══════════════════════════════════════════════════════════ -->
+    <record id="action_chatbot_session" model="ir.actions.act_window">
+        <field name="name">Chat Sessions</field>
+        <field name="res_model">perfecthr.chatbot.session</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_chatbot_session_search"/>
+        <field name="context">{'search_default_active': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No chat sessions yet!
+            </p>
+            <p>
+                Chat sessions will appear here when visitors interact with
+                the AI chatbot on your website.
+            </p>
+        </field>
+    </record>
+
+</odoo>

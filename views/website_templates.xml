@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<odoo>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Inject Chatbot Widget into Website Layout
+         ═══════════════════════════════════════════════════════════ -->
+    <template id="chatbot_widget_layout"
+              inherit_id="website.layout"
+              name="Perfect HR Chatbot Widget"
+              active="True">
+        <xpath expr="//body" position="inside">
+            <div id="perfecthr-chatbot-root"
+                 class="perfecthr-chatbot-mount"/>
+        </xpath>
+    </template>
+
+</odoo>

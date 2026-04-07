@@ -1,0 +1,14 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_chatbot_session_public,perfecthr.chatbot.session.public,model_perfecthr_chatbot_session,base.group_public,1,0,1,0
+access_chatbot_session_user,perfecthr.chatbot.session.user,model_perfecthr_chatbot_session,perfecthr_chatbot.group_chatbot_user,1,1,1,0
+access_chatbot_session_admin,perfecthr.chatbot.session.admin,model_perfecthr_chatbot_session,perfecthr_chatbot.group_chatbot_admin,1,1,1,1
+access_chatbot_message_public,perfecthr.chatbot.message.public,model_perfecthr_chatbot_message,base.group_public,1,0,1,0
+access_chatbot_message_user,perfecthr.chatbot.message.user,model_perfecthr_chatbot_message,perfecthr_chatbot.group_chatbot_user,1,1,1,0
+access_chatbot_message_admin,perfecthr.chatbot.message.admin,model_perfecthr_chatbot_message,perfecthr_chatbot.group_chatbot_admin,1,1,1,1
+access_chatbot_knowledge_user,perfecthr.chatbot.knowledge.user,model_perfecthr_chatbot_knowledge,perfecthr_chatbot.group_chatbot_user,1,0,0,0
+access_chatbot_knowledge_admin,perfecthr.chatbot.knowledge.admin,model_perfecthr_chatbot_knowledge,perfecthr_chatbot.group_chatbot_admin,1,1,1,1
+access_chatbot_knowledge_tag_user,perfecthr.chatbot.knowledge.tag.user,model_perfecthr_chatbot_knowledge_tag,perfecthr_chatbot.group_chatbot_user,1,0,0,0
+access_chatbot_knowledge_tag_admin,perfecthr.chatbot.knowledge.tag.admin,model_perfecthr_chatbot_knowledge_tag,perfecthr_chatbot.group_chatbot_admin,1,1,1,1
+access_chatbot_analytics_user,perfecthr.chatbot.analytics.user,model_perfecthr_chatbot_analytics,perfecthr_chatbot.group_chatbot_user,1,0,0,0
+access_chatbot_analytics_admin,perfecthr.chatbot.analytics.admin,model_perfecthr_chatbot_analytics,perfecthr_chatbot.group_chatbot_admin,1,1,1,1
+access_chatbot_lead_public,crm.lead.chatbot.public,model_crm_lead,base.group_public,0,0,1,0

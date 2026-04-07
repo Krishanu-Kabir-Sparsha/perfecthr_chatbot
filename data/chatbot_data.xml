@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<odoo>
+    <data noupdate="1">
+
+        <!-- ═══════════════════════════════════════════════════════
+             Default System Parameters
+             ═══════════════════════════════════════════════════════ -->
+        <record id="config_ollama_url" model="ir.config_parameter">
+            <field name="key">perfecthr_chatbot.ollama_url</field>
+            <field name="value">http://localhost:11434</field>
+        </record>
+
+        <record id="config_model_name" model="ir.config_parameter">
+            <field name="key">perfecthr_chatbot.model_name</field>
+            <field name="value">mistral</field>
+        </record>
+
+        <record id="config_embedding_model" model="ir.config_parameter">
+            <field name="key">perfecthr_chatbot.embedding_model</field>
+            <field name="value">nomic-embed-text</field>
+        </record>
+
+        <record id="config_max_tokens" model="ir.config_parameter">
+            <field name="key">perfecthr_chatbot.max_tokens</field>
+            <field name="value">512</field>
+        </record>
+
+        <record id="config_temperature" model="ir.config_parameter">
+            <field name="key">perfecthr_chatbot.temperature</field>
+            <field name="value">0.7</field>
+        </record>
+
+        <record id="config_greeting" model="ir.config_parameter">
+            <field name="key">perfecthr_chatbot.greeting_message</field>
+            <field name="value">👋 Hi there! I'm your Perfect HR AI Assistant. I can help you with:
+
+• HR module features &amp; capabilities
+• Pricing and packages
+• Scheduling a demo
+• Any HR management questions
+
+How can I help you today?</field>
+        </record>
+
+        <record id="config_auto_lead" model="ir.config_parameter">
+            <field name="key">perfecthr_chatbot.auto_create_lead</field>
+            <field name="value">True</field>
+        </record>
+
+        <!-- ═══════════════════════════════════════════════════════
+             Demo Knowledge Base Articles
+             ═══════════════════════════════════════════════════════ -->
+        <record id="knowledge_overview" model="perfecthr.chatbot.knowledge">
+            <field name="name">Perfect HR — Overview</field>
+            <field name="category">product</field>
+            <field name="content_summary">Complete HR management solution built on Odoo</field>
+            <field name="content">Perfect HR is a comprehensive Human Resource Management solution built on Odoo Community Edition v18. It provides a complete suite of HR modules designed to streamline every aspect of workforce management.
+
+Key Modules:
+- Payroll Management: Automated salary calculation, tax deductions, bank transfers, and payslip generation
+- Attendance Tracking: Biometric integration, GPS-based check-in, shift management
+- Leave Management: Multi-level approval workflows, accrual policies, calendar integration
+- Recruitment: Job posting, applicant tracking, interview scheduling, offer management
+- Performance Management: KPI tracking, 360-degree feedback, performance reviews
+- Training &amp; Development: Course management, certification tracking, skill gap analysis
+- Employee Self-Service: Mobile app, document management, request portal
+
+Perfect HR is designed for organizations of all sizes, from startups with 10 employees to enterprises with 10,000+ staff. Our AI-powered analytics provide actionable insights for strategic HR decision-making.</field>
+        </record>
+
+        <record id="knowledge_payroll" model="perfecthr.chatbot.knowledge">
+            <field name="name">Payroll Module</field>
+            <field name="category">product</field>
+            <field name="content_summary">Automated payroll processing with compliance</field>
+            <field name="content">Perfect HR Payroll Module provides end-to-end payroll processing:
+
+Features:
+- Automated salary computation based on attendance, leaves, and overtime
+- Multi-currency and multi-company support
+- Tax calculation and statutory compliance
+- Bank file generation for bulk salary transfers
+- Payslip generation with customizable templates
+- Loan and advance management with EMI deductions
+- Bonus and incentive processing
+- Year-end tax reporting and Form 16 generation
+- Integration with accounting for journal entries
+- Employee self-service for payslip viewing
+
+Benefits:
+- Reduce payroll processing time by 80%
+- Eliminate manual calculation errors
+- Ensure compliance with local labor laws
+- Complete audit trail for all payroll transactions</field>
+        </record>
+
+        <record id="knowledge_attendance" model="perfecthr.chatbot.knowledge">
+            <field name="name">Attendance &amp; Time Tracking</field>
+            <field name="category">product</field>
+            <field name="content_summary">Advanced attendance with biometric and GPS support</field>
+            <field name="content">Perfect HR Attendance Module offers comprehensive time tracking:
+
+Features:
+- Biometric device integration (fingerprint, face recognition)
+- Mobile GPS-based check-in/check-out
+- QR code attendance for events
+- Shift management with rotating schedules
+- Overtime calculation with configurable rules
+- Late coming and early leaving tracking
+- Work-from-home attendance management
+- Real-time attendance dashboard
+- Automated notifications for absent employees
+- Integration with payroll for accurate salary computation
+
+Supported Devices:
+- ZKTeco biometric devices
+- Hikvision face recognition terminals
+- Any device supporting ZKTeco protocol
+
+The module supports flexible work arrangements and can handle complex shift patterns including split shifts, night shifts, and rotational duties.</field>
+        </record>
+
+        <record id="knowledge_pricing" model="perfecthr.chatbot.knowledge">
+            <field name="name">Pricing Plans</field>
+            <field name="category">pricing</field>
+            <field name="content_summary">Flexible pricing for all organization sizes</field>
+            <field name="content">Perfect HR offers flexible pricing to suit every organization:
+
+STARTER Plan ($5/employee/month):
+- Core HR &amp; Employee Directory
+- Leave Management
+- Basic Attendance
+- Employee Self-Service Portal
+- Email Support
+- Best for: Small teams (1-50 employees)
+
+PROFESSIONAL Plan ($10/employee/month):
+- Everything in Starter
+- Payroll Processing
+- Advanced Attendance (Biometric)
+- Recruitment Module
+- Performance Management
+- API Access
+- Priority Support
+- Best for: Growing companies (50-500 employees)
+
+ENTERPRISE Plan ($15/employee/month):
+- Everything in Professional
+- AI-Powered Analytics
+- Custom Workflows
+- Multi-company Support
+- Training &amp; Development
+- Dedicated Account Manager
+- SLA Guarantee (99.9% uptime)
+- Best for: Large organizations (500+ employees)
+
+All plans include:
+- Free implementation support
+- Data migration assistance
+- 30-day free trial (no credit card required)
+- Monthly or annual billing (20% discount on annual)
+
+Contact us for custom enterprise pricing for 1000+ employees.</field>
+        </record>
+
+        <record id="knowledge_faq" model="perfecthr.chatbot.knowledge">
+            <field name="name">Frequently Asked Questions</field>
+            <field name="category">faq</field>
+            <field name="content_summary">Common questions about Perfect HR</field>
+            <field name="content">Frequently Asked Questions about Perfect HR:
+
+Q: Is Perfect HR cloud-based or on-premise?
+A: Perfect HR is available both as a cloud-hosted SaaS solution and as an on-premise installation. The cloud version is hosted on secure AWS servers with daily backups.
+
+Q: How long does implementation take?
+A: Typical implementation takes 2-4 weeks for small organizations and 6-8 weeks for enterprise setups. This includes data migration, configuration, and training.
+
+Q: Can I migrate from my existing HR system?
+A: Yes! We provide free data migration support. We can import data from Excel, CSV, or directly from systems like SAP HR, Workday, BambooHR, and others.
+
+Q: Is there a mobile app?
+A: Yes, Perfect HR has a mobile app for both iOS and Android. Employees can mark attendance, apply for leaves, view payslips, and more from their phones.
+
+Q: What kind of support do you offer?
+A: We offer email support for Starter plans, priority email and chat support for Professional, and dedicated account management with phone support for Enterprise.
+
+Q: Is my data secure?
+A: Absolutely. We use AES-256 encryption, SSL/TLS for data in transit, regular security audits, and comply with GDPR and local data protection regulations.
+
+Q: Can Perfect HR handle multiple countries/currencies?
+A: Yes, Perfect HR supports multi-currency, multi-company, and multi-country configurations with localized payroll compliance.</field>
+        </record>
+
+        <record id="knowledge_case_study" model="perfecthr.chatbot.knowledge">
+            <field name="name">Success Story — TechCorp Bangladesh</field>
+            <field name="category">case_study</field>
+            <field name="content_summary">How TechCorp reduced HR processing time by 75%</field>
+            <field name="content">Case Study: TechCorp Bangladesh — 500 Employee IT Company
+
+Challenge:
+- Manual attendance tracking using paper registers
+- Payroll processing took 5 days each month
+- Leave management was chaotic with no visibility
+- No centralized employee database
+
+Solution:
+Implemented Perfect HR Professional Plan with:
+- Biometric attendance integration (ZKTeco devices at 3 offices)
+- Automated payroll with Bangladesh labor law compliance
+- Leave management with 4-level approval workflow
+- Employee self-service portal
+
+Results:
+- Payroll processing time reduced from 5 days to 4 hours (95% reduction)
+- Attendance accuracy improved from 85% to 99.5%
+- Leave management went fully paperless
+- HR team freed up 30 hours/week for strategic initiatives
+- Employee satisfaction with HR services increased by 45%
+- ROI achieved within 3 months
+
+Quote: "Perfect HR transformed our HR operations completely. What used to take our team days now happens automatically." — HR Director, TechCorp</field>
+        </record>
+
+    </data>
+</odoo>

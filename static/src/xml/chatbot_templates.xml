@@ -1,0 +1,251 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<templates xml:space="preserve">
+
+    <!-- ═══════════════════════════════════════════════════════════
+         ChatbotMessage — Single message bubble
+         ═══════════════════════════════════════════════════════════ -->
+    <t t-name="perfecthr_chatbot.ChatbotMessage" owl="1">
+        <div t-attf-class="phr-chat-message phr-chat-message--{{ props.role }}">
+            <!-- Avatar -->
+            <div class="phr-chat-avatar">
+                <t t-if="isAssistant">
+                    <div class="phr-chat-avatar__bot">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2a4 4 0 0 1 4 4v2h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2V6a4 4 0 0 1 4-4z"/>
+                            <circle cx="9" cy="13" r="1"/>
+                            <circle cx="15" cy="13" r="1"/>
+                            <path d="M10 17h4"/>
+                        </svg>
+                    </div>
+                </t>
+                <t t-if="isUser">
+                    <div class="phr-chat-avatar__user">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                            <circle cx="12" cy="7" r="4"/>
+                        </svg>
+                    </div>
+                </t>
+            </div>
+
+            <!-- Bubble -->
+            <div class="phr-chat-bubble">
+                <div class="phr-chat-bubble__content" t-raw="formattedContent"/>
+                <div class="phr-chat-bubble__time" t-if="formattedTime">
+                    <t t-esc="formattedTime"/>
+                </div>
+            </div>
+        </div>
+    </t>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         ChatbotWidget — Main floating widget
+         ═══════════════════════════════════════════════════════════ -->
+    <t t-name="perfecthr_chatbot.ChatbotWidget" owl="1">
+        <div class="phr-chatbot-container">
+
+            <!-- ── Floating Bubble ──────────────────────────────── -->
+            <button class="phr-chatbot-bubble" t-on-click="toggleChat"
+                    t-att-class="{ 'phr-chatbot-bubble--active': state.isOpen }"
+                    aria-label="Open Chat" id="phr-chatbot-toggle">
+                <t t-if="!state.isOpen">
+                    <svg class="phr-chatbot-bubble__icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    <span t-if="state.unreadCount > 0" class="phr-chatbot-bubble__badge">
+                        <t t-esc="state.unreadCount"/>
+                    </span>
+                </t>
+                <t t-else="">
+                    <svg class="phr-chatbot-bubble__icon phr-chatbot-bubble__icon--close" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"/>
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </t>
+            </button>
+
+            <!-- ── Chat Window ──────────────────────────────────── -->
+            <div t-if="state.isOpen"
+                 class="phr-chatbot-window"
+                 t-att-class="{ 'phr-chatbot-window--open': state.isOpen }">
+
+                <!-- Header -->
+                <div class="phr-chatbot-header">
+                    <div class="phr-chatbot-header__info">
+                        <div class="phr-chatbot-header__avatar">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 2a4 4 0 0 1 4 4v2h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2V6a4 4 0 0 1 4-4z"/>
+                                <circle cx="9" cy="13" r="1"/>
+                                <circle cx="15" cy="13" r="1"/>
+                                <path d="M10 17h4"/>
+                            </svg>
+                        </div>
+                        <div class="phr-chatbot-header__text">
+                            <div class="phr-chatbot-header__title">Perfect HR Assistant</div>
+                            <div class="phr-chatbot-header__status">
+                                <span class="phr-chatbot-header__dot"/>
+                                AI-powered support
+                            </div>
+                        </div>
+                    </div>
+                    <div class="phr-chatbot-header__actions">
+                        <button class="phr-chatbot-header__btn" t-on-click="startNewConversation"
+                                title="New Conversation" aria-label="New conversation">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 5v14M5 12h14"/>
+                            </svg>
+                        </button>
+                        <button class="phr-chatbot-header__btn" t-on-click="closeChat"
+                                title="Close" aria-label="Close chat">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="18" y1="6" x2="6" y2="18"/>
+                                <line x1="6" y1="6" x2="18" y2="18"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Message List -->
+                <div class="phr-chatbot-messages" t-ref="messageList">
+                    <t t-foreach="state.messages" t-as="msg" t-key="msg.timestamp || msg.content">
+                        <ChatbotMessage
+                            role="msg.role"
+                            content="msg.content"
+                            timestamp="msg.timestamp"
+                            intent="msg.intent"/>
+                    </t>
+
+                    <!-- Typing Indicator -->
+                    <div t-if="state.isTyping" class="phr-chat-message phr-chat-message--assistant">
+                        <div class="phr-chat-avatar">
+                            <div class="phr-chat-avatar__bot">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M12 2a4 4 0 0 1 4 4v2h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2V6a4 4 0 0 1 4-4z"/>
+                                    <circle cx="9" cy="13" r="1"/>
+                                    <circle cx="15" cy="13" r="1"/>
+                                    <path d="M10 17h4"/>
+                                </svg>
+                            </div>
+                        </div>
+                        <div class="phr-chat-bubble">
+                            <div class="phr-typing-indicator">
+                                <span class="phr-typing-dot"/>
+                                <span class="phr-typing-dot"/>
+                                <span class="phr-typing-dot"/>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Lead Capture Suggestion -->
+                    <div t-if="state.suggestLeadCapture and !state.leadCaptured"
+                         class="phr-lead-suggest">
+                        <p>I'd love to connect you with our team! Would you like to share your contact details?</p>
+                        <div class="phr-lead-suggest__actions">
+                            <button class="phr-btn phr-btn--primary" t-on-click="showLeadForm">
+                                Yes, let's connect! 🚀
+                            </button>
+                            <button class="phr-btn phr-btn--ghost" t-on-click="dismissLeadSuggestion">
+                                Maybe later
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Lead Form -->
+                    <div t-if="state.showLeadForm" class="phr-lead-form">
+                        <div class="phr-lead-form__header">
+                            <h4>📋 Let's Get in Touch</h4>
+                            <p>Share your details and our team will reach out!</p>
+                        </div>
+                        <div class="phr-lead-form__fields">
+                            <div class="phr-lead-form__group">
+                                <input type="text" class="phr-lead-form__input"
+                                       placeholder="Your Name *"
+                                       data-field="name"
+                                       t-att-value="state.leadForm.name"
+                                       t-on-input="onLeadFieldChange"/>
+                                <span t-if="state.leadFormErrors.name" class="phr-lead-form__error">
+                                    <t t-esc="state.leadFormErrors.name"/>
+                                </span>
+                            </div>
+                            <div class="phr-lead-form__group">
+                                <input type="email" class="phr-lead-form__input"
+                                       placeholder="Email Address *"
+                                       data-field="email"
+                                       t-att-value="state.leadForm.email"
+                                       t-on-input="onLeadFieldChange"/>
+                                <span t-if="state.leadFormErrors.email" class="phr-lead-form__error">
+                                    <t t-esc="state.leadFormErrors.email"/>
+                                </span>
+                            </div>
+                            <div class="phr-lead-form__group">
+                                <input type="tel" class="phr-lead-form__input"
+                                       placeholder="Phone Number"
+                                       data-field="phone"
+                                       t-att-value="state.leadForm.phone"
+                                       t-on-input="onLeadFieldChange"/>
+                            </div>
+                            <div class="phr-lead-form__group">
+                                <input type="text" class="phr-lead-form__input"
+                                       placeholder="Company Name"
+                                       data-field="company"
+                                       t-att-value="state.leadForm.company"
+                                       t-on-input="onLeadFieldChange"/>
+                            </div>
+                            <div class="phr-lead-form__group">
+                                <select class="phr-lead-form__input phr-lead-form__select"
+                                        data-field="employee_size"
+                                        t-on-change="onLeadFieldChange">
+                                    <option value="">Employee Size</option>
+                                    <option value="1-10">1-10</option>
+                                    <option value="11-50">11-50</option>
+                                    <option value="51-200">51-200</option>
+                                    <option value="201-500">201-500</option>
+                                    <option value="501-1000">501-1000</option>
+                                    <option value="1000+">1000+</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="phr-lead-form__actions">
+                            <button class="phr-btn phr-btn--primary phr-btn--full"
+                                    t-on-click="submitLeadForm">
+                                Submit ✨
+                            </button>
+                            <button class="phr-btn phr-btn--ghost phr-btn--full"
+                                    t-on-click="cancelLeadForm">
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Input Bar -->
+                <div class="phr-chatbot-input">
+                    <div class="phr-chatbot-input__wrapper">
+                        <textarea class="phr-chatbot-input__field"
+                                  rows="1"
+                                  placeholder="Type your message..."
+                                  t-att-value="state.inputText"
+                                  t-on-input="onInputChange"
+                                  t-on-keydown="onInputKeydown"
+                                  t-att-disabled="state.isTyping"
+                                  id="phr-chatbot-input"
+                                  aria-label="Chat message input"/>
+                        <button class="phr-chatbot-input__send"
+                                t-on-click="sendMessage"
+                                t-att-disabled="state.isTyping || !state.inputText.trim()"
+                                aria-label="Send message">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="22" y1="2" x2="11" y2="13"/>
+                                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="phr-chatbot-input__footer">
+                        Powered by <strong>Perfect HR</strong> AI
+                    </div>
+                </div>
+            </div>
+        </div>
+    </t>
+
+</templates>

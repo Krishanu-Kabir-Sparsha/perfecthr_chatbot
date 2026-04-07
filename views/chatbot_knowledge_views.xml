@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<odoo>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Knowledge Base Tree View
+         ═══════════════════════════════════════════════════════════ -->
+    <record id="view_chatbot_knowledge_tree" model="ir.ui.view">
+        <field name="name">perfecthr.chatbot.knowledge.tree</field>
+        <field name="model">perfecthr.chatbot.knowledge</field>
+        <field name="arch" type="xml">
+            <list string="Knowledge Base">
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="category" widget="badge"/>
+                <field name="content_summary"/>
+                <field name="version"/>
+                <field name="is_embedded" widget="boolean_toggle"/>
+                <field name="last_embedded_at"/>
+                <field name="is_active"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Knowledge Base Form View
+         ═══════════════════════════════════════════════════════════ -->
+    <record id="view_chatbot_knowledge_form" model="ir.ui.view">
+        <field name="name">perfecthr.chatbot.knowledge.form</field>
+        <field name="model">perfecthr.chatbot.knowledge</field>
+        <field name="arch" type="xml">
+            <form string="Knowledge Article">
+                <header>
+                    <button name="action_embed" string="⚡ Generate Embedding"
+                            type="object" class="btn-primary"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button class="oe_stat_button" name="action_embed"
+                                type="object" icon="fa-bolt"
+                                invisible="is_embedded">
+                            <span>Not Embedded</span>
+                        </button>
+                        <button class="oe_stat_button" disabled="1"
+                                icon="fa-check-circle"
+                                invisible="not is_embedded">
+                            <span>Embedded ✓</span>
+                        </button>
+                    </div>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="name" placeholder="Article Title"/>
+                        </h1>
+                    </div>
+
+                    <group>
+                        <group>
+                            <field name="category"/>
+                            <field name="is_active"/>
+                            <field name="tag_ids" widget="many2many_tags"
+                                   options="{'color_field': 'color'}"/>
+                        </group>
+                        <group>
+                            <field name="version" readonly="1"/>
+                            <field name="last_embedded_at" readonly="1"/>
+                            <field name="embedding_model" readonly="1"/>
+                            <field name="sequence"/>
+                        </group>
+                    </group>
+
+                    <group string="Summary">
+                        <field name="content_summary" nolabel="1"
+                               placeholder="Brief summary for search results display"/>
+                    </group>
+
+                    <notebook>
+                        <page string="Content" name="content">
+                            <field name="content" nolabel="1"
+                                   placeholder="Enter the knowledge base content here. This text will be embedded and used for RAG retrieval."/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Knowledge Base Kanban View
+         ═══════════════════════════════════════════════════════════ -->
+    <record id="view_chatbot_knowledge_kanban" model="ir.ui.view">
+        <field name="name">perfecthr.chatbot.knowledge.kanban</field>
+        <field name="model">perfecthr.chatbot.knowledge</field>
+        <field name="arch" type="xml">
+            <kanban default_group_by="category"
+                    class="o_kanban_small_column">
+                <field name="name"/>
+                <field name="category"/>
+                <field name="is_embedded"/>
+                <field name="version"/>
+                <field name="is_active"/>
+                <templates>
+                    <t t-name="card">
+                        <div t-attf-class="oe_kanban_color_#{kanban_getcolor(0)}">
+                            <div class="oe_kanban_content">
+                                <div class="o_kanban_record_title">
+                                    <strong><field name="name"/></strong>
+                                </div>
+                                <div class="o_kanban_record_body">
+                                    <field name="content_summary"/>
+                                </div>
+                                <div class="o_kanban_record_bottom">
+                                    <div class="oe_kanban_bottom_left">
+                                        <span>v<field name="version"/></span>
+                                    </div>
+                                    <div class="oe_kanban_bottom_right">
+                                        <span t-if="record.is_embedded.raw_value"
+                                              class="badge text-bg-success">Embedded</span>
+                                        <span t-else=""
+                                              class="badge text-bg-warning">Pending</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </t>
+                </templates>
+            </kanban>
+        </field>
+    </record>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Knowledge Base Search View
+         ═══════════════════════════════════════════════════════════ -->
+    <record id="view_chatbot_knowledge_search" model="ir.ui.view">
+        <field name="name">perfecthr.chatbot.knowledge.search</field>
+        <field name="model">perfecthr.chatbot.knowledge</field>
+        <field name="arch" type="xml">
+            <search string="Search Knowledge Base">
+                <field name="name"/>
+                <field name="content"/>
+                <filter name="active" string="Active"
+                        domain="[('is_active', '=', True)]"/>
+                <filter name="not_embedded" string="Not Embedded"
+                        domain="[('is_embedded', '=', False)]"/>
+                <separator/>
+                <filter name="product" string="Product"
+                        domain="[('category', '=', 'product')]"/>
+                <filter name="faq" string="FAQ"
+                        domain="[('category', '=', 'faq')]"/>
+                <filter name="pricing" string="Pricing"
+                        domain="[('category', '=', 'pricing')]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_category" string="Category"
+                            context="{'group_by': 'category'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Knowledge Base Action
+         ═══════════════════════════════════════════════════════════ -->
+    <record id="action_chatbot_knowledge" model="ir.actions.act_window">
+        <field name="name">Knowledge Base</field>
+        <field name="res_model">perfecthr.chatbot.knowledge</field>
+        <field name="view_mode">kanban,list,form</field>
+        <field name="search_view_id" ref="view_chatbot_knowledge_search"/>
+        <field name="context">{'search_default_active': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Create your first knowledge article!
+            </p>
+            <p>
+                Add product information, FAQs, pricing details, and case
+                studies. The AI chatbot will use this content to answer
+                visitor questions.
+            </p>
+        </field>
+    </record>
+
+</odoo>

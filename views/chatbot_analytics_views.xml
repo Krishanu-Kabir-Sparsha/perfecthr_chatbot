@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<odoo>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Analytics Tree View
+         ═══════════════════════════════════════════════════════════ -->
+    <record id="view_chatbot_analytics_tree" model="ir.ui.view">
+        <field name="name">perfecthr.chatbot.analytics.tree</field>
+        <field name="model">perfecthr.chatbot.analytics</field>
+        <field name="arch" type="xml">
+            <list string="Chatbot Analytics" create="0">
+                <field name="date"/>
+                <field name="total_conversations"/>
+                <field name="total_messages"/>
+                <field name="total_leads"/>
+                <field name="conversion_rate"
+                       widget="progressbar"
+                       options="{'max_value': 100}"/>
+                <field name="qualified_leads"/>
+                <field name="qualified_rate"
+                       widget="progressbar"
+                       options="{'max_value': 100}"/>
+                <field name="avg_response_time_ms" string="Avg RT (ms)"/>
+                <field name="resolution_rate"
+                       widget="progressbar"
+                       options="{'max_value': 100}"/>
+                <field name="drop_off_count"/>
+                <field name="escalation_count"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Analytics Form View
+         ═══════════════════════════════════════════════════════════ -->
+    <record id="view_chatbot_analytics_form" model="ir.ui.view">
+        <field name="name">perfecthr.chatbot.analytics.form</field>
+        <field name="model">perfecthr.chatbot.analytics</field>
+        <field name="arch" type="xml">
+            <form string="Daily Analytics" create="0">
+                <header>
+                    <button name="action_refresh" string="🔄 Refresh"
+                            type="object" class="btn-primary"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1>
+                            Analytics — <field name="date"/>
+                        </h1>
+                    </div>
+
+                    <group>
+                        <group string="📊 Conversations">
+                            <field name="total_conversations"/>
+                            <field name="total_messages"/>
+                            <field name="drop_off_count"/>
+                            <field name="escalation_count"/>
+                        </group>
+                        <group string="🎯 Lead Generation">
+                            <field name="total_leads"/>
+                            <field name="conversion_rate" widget="progressbar"
+                                   options="{'max_value': 100}"/>
+                            <field name="qualified_leads"/>
+                            <field name="qualified_rate" widget="progressbar"
+                                   options="{'max_value': 100}"/>
+                        </group>
+                    </group>
+
+                    <group>
+                        <group string="⚡ Performance">
+                            <field name="avg_response_time_ms"/>
+                            <field name="resolution_rate" widget="progressbar"
+                                   options="{'max_value': 100}"/>
+                        </group>
+                        <group string="🔍 Top Intents">
+                            <field name="top_intents_json" widget="text"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Analytics Graph Views
+         ═══════════════════════════════════════════════════════════ -->
+    <record id="view_chatbot_analytics_graph_conversations" model="ir.ui.view">
+        <field name="name">perfecthr.chatbot.analytics.graph.conversations</field>
+        <field name="model">perfecthr.chatbot.analytics</field>
+        <field name="arch" type="xml">
+            <graph string="Conversation Trends" type="line">
+                <field name="date" type="row"/>
+                <field name="total_conversations" type="measure"/>
+                <field name="total_leads" type="measure"/>
+            </graph>
+        </field>
+    </record>
+
+    <record id="view_chatbot_analytics_graph_conversion" model="ir.ui.view">
+        <field name="name">perfecthr.chatbot.analytics.graph.conversion</field>
+        <field name="model">perfecthr.chatbot.analytics</field>
+        <field name="arch" type="xml">
+            <graph string="Conversion Metrics" type="bar">
+                <field name="date" type="row"/>
+                <field name="conversion_rate" type="measure"/>
+                <field name="resolution_rate" type="measure"/>
+            </graph>
+        </field>
+    </record>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Analytics Pivot View
+         ═══════════════════════════════════════════════════════════ -->
+    <record id="view_chatbot_analytics_pivot" model="ir.ui.view">
+        <field name="name">perfecthr.chatbot.analytics.pivot</field>
+        <field name="model">perfecthr.chatbot.analytics</field>
+        <field name="arch" type="xml">
+            <pivot string="Analytics Pivot">
+                <field name="date" type="row" interval="week"/>
+                <field name="total_conversations" type="measure"/>
+                <field name="total_leads" type="measure"/>
+                <field name="conversion_rate" type="measure"/>
+                <field name="avg_response_time_ms" type="measure"/>
+            </pivot>
+        </field>
+    </record>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Analytics Search View
+         ═══════════════════════════════════════════════════════════ -->
+    <record id="view_chatbot_analytics_search" model="ir.ui.view">
+        <field name="name">perfecthr.chatbot.analytics.search</field>
+        <field name="model">perfecthr.chatbot.analytics</field>
+        <field name="arch" type="xml">
+            <search string="Search Analytics">
+                <field name="date"/>
+                <filter name="this_week" string="This Week"
+                        domain="[('date', '>=', (context_today() - relativedelta(weeks=1)).strftime('%%Y-%%m-%%d'))]"/>
+                <filter name="this_month" string="This Month"
+                        domain="[('date', '>=', (context_today()).strftime('%%Y-%%m-01'))]"/>
+                <filter name="last_month" string="Last Month"
+                        domain="[
+                            ('date', '>=', (context_today() - relativedelta(months=1)).strftime('%%Y-%%m-01')),
+                            ('date', '&lt;', context_today().strftime('%%Y-%%m-01'))
+                        ]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_week" string="Week"
+                            context="{'group_by': 'date:week'}"/>
+                    <filter name="group_month" string="Month"
+                            context="{'group_by': 'date:month'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Analytics Action
+         ═══════════════════════════════════════════════════════════ -->
+    <record id="action_chatbot_analytics" model="ir.actions.act_window">
+        <field name="name">Analytics Dashboard</field>
+        <field name="res_model">perfecthr.chatbot.analytics</field>
+        <field name="view_mode">graph,pivot,list,form</field>
+        <field name="search_view_id" ref="view_chatbot_analytics_search"/>
+        <field name="context">{'search_default_this_month': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No analytics data yet!
+            </p>
+            <p>
+                Analytics are computed daily. Data will appear once
+                the chatbot starts receiving conversations.
+            </p>
+        </field>
+    </record>
+
+</odoo>

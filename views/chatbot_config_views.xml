@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<odoo>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Chatbot Settings — inherits res.config.settings
+         ═══════════════════════════════════════════════════════════ -->
+    <record id="view_chatbot_config_settings" model="ir.ui.view">
+        <field name="name">res.config.settings.view.form.inherit.perfecthr.chatbot</field>
+        <field name="model">res.config.settings</field>
+        <field name="inherit_id" ref="base.res_config_settings_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//form" position="inside">
+                 <app id="perfecthr_chatbot_settings" name="perfecthr_chatbot"
+                     data-string="AI Chatbot" string="AI Chatbot"
+                     groups="perfecthr_chatbot.group_chatbot_admin">
+
+                    <!-- ── Ollama Connection ───────────────────────── -->
+                    <block id="chatbot_block_ollama" title="🤖 Ollama AI Engine"
+                           help="Configure the local Ollama server for AI responses.">
+                        <setting id="chatbot_setting_ollama_url" string="Ollama Server URL"
+                                 help="URL where Ollama is running.">
+                            <field name="chatbot_ollama_url"/>
+                            <button name="action_test_ollama_connection"
+                                    string="🔌 Test Connection"
+                                    type="object"
+                                    class="btn-primary btn-sm ms-2"/>
+                            <button name="action_list_models"
+                                    string="📋 List Models"
+                                    type="object"
+                                    class="btn-secondary btn-sm ms-2"/>
+                        </setting>
+
+                        <setting id="chatbot_setting_llm_model" string="LLM Model"
+                                 help="Select the language model for generating AI responses.">
+                            <field name="chatbot_model_name"/>
+                            <button name="action_pull_model"
+                                    string="⬇️ Pull Model"
+                                    type="object"
+                                    class="btn-warning btn-sm ms-2"/>
+                        </setting>
+
+                        <setting id="chatbot_setting_embedding_model" string="Embedding Model"
+                                 help="Model for generating text embeddings (used in RAG knowledge retrieval).">
+                            <field name="chatbot_embedding_model"/>
+                            <button name="action_pull_embedding_model"
+                                    string="⬇️ Pull Embedding Model"
+                                    type="object"
+                                    class="btn-warning btn-sm ms-2"/>
+                        </setting>
+                    </block>
+
+                    <!-- ── Response Settings ───────────────────────── -->
+                    <block id="chatbot_block_response" title="⚙️ Response Settings"
+                           help="Fine-tune how the AI generates responses.">
+                        <setting id="chatbot_setting_temperature" string="Temperature"
+                                 help="Controls creativity of responses. Lower = more focused, Higher = more creative.">
+                            <field name="chatbot_temperature"/>
+                        </setting>
+
+                        <setting id="chatbot_setting_max_tokens" string="Max Tokens"
+                                 help="Maximum length of AI response.">
+                            <field name="chatbot_max_tokens"/>
+                        </setting>
+                    </block>
+
+                    <!-- ── Chat UI Settings ────────────────────────── -->
+                    <block id="chatbot_block_widget" title="💬 Chat Widget"
+                           help="Customize the chatbot greeting and behavior.">
+                        <setting id="chatbot_setting_greeting_message" string="Greeting Message"
+                                 help="The first message shown when a visitor opens the chat.">
+                            <field name="chatbot_greeting_message" nolabel="1"/>
+                        </setting>
+
+                        <setting id="chatbot_setting_system_prompt" string="System Prompt"
+                                 help="Instructions that control the AI's personality and behavior.">
+                            <field name="chatbot_system_prompt" nolabel="1"/>
+                        </setting>
+                    </block>
+
+                    <!-- ── CRM Settings ────────────────────────────── -->
+                    <block id="chatbot_block_crm" title="🎯 CRM Integration"
+                           help="Configure how leads are created from chatbot conversations.">
+                        <setting id="chatbot_setting_auto_create_leads" string="Auto-create Leads"
+                                 help="Automatically create CRM leads when visitors share contact info.">
+                            <field name="chatbot_auto_create_lead"/>
+                        </setting>
+
+                        <setting id="chatbot_setting_sales_team" string="Sales Team"
+                                 help="Default sales team assigned to chatbot-generated leads.">
+                            <field name="chatbot_sales_team_id"/>
+                        </setting>
+                    </block>
+
+                </app>
+            </xpath>
+        </field>
+    </record>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Settings Action
+         ═══════════════════════════════════════════════════════════ -->
+    <record id="action_chatbot_config" model="ir.actions.act_window">
+        <field name="name">AI Chatbot Settings</field>
+        <field name="res_model">res.config.settings</field>
+        <field name="view_mode">form</field>
+        <field name="target">inline</field>
+        <field name="context">{'module': 'perfecthr_chatbot'}</field>
+    </record>
+
+</odoo>
