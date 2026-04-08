@@ -6,16 +6,20 @@
 export class ChatbotService {
     constructor() {
         this.baseUrl = '';
+        this.requestTimeoutMs = 35000;
     }
 
     async _jsonRpc(endpoint, params = {}) {
         const url = `${this.baseUrl}${endpoint}`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), this.requestTimeoutMs);
         try {
             const response = await fetch(url, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
+                signal: controller.signal,
                 body: JSON.stringify({
                     jsonrpc: '2.0',
                     method: 'call',
@@ -36,11 +40,20 @@ export class ChatbotService {
 
             return data.result;
         } catch (error) {
+            if (error.name === 'AbortError') {
+                return {
+                    status: 'error',
+                    error: 'The request is taking longer than expected. Please wait a moment.',
+                    code: 'timeout',
+                };
+            }
             console.error(`[PerfectHR Chatbot] RPC failed: ${endpoint}`, error);
             return {
                 status: 'error',
                 error: 'Connection failed. Please try again.',
             };
+        } finally {
+            clearTimeout(timeoutId);
         }
     }
 

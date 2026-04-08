@@ -1,6 +1,74 @@
 /** @odoo-module **/
 
-import { Component } from "@odoo/owl";
+import { Component, markup } from "@odoo/owl";
+
+function escapeHtml(text) {
+    return text.replace(/[&<>"]|'/g, (char) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+    }[char]));
+}
+
+function formatInline(text) {
+    const escaped = escapeHtml(text);
+    return escaped
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/(^|[\s>])\*([^*]+?)\*(?=[\s<]|$)/g, '$1<em>$2</em>');
+}
+
+function renderMessageHtml(content) {
+    let text = content || '';
+
+    const decodedText = document.createElement('textarea');
+    decodedText.innerHTML = text;
+    text = decodedText.value;
+
+    text = text
+        .replace(/\r\n/g, '\n')
+        .replace(/<br\s*\/?\s*>/gi, '\n')
+        .replace(/<\/p>/gi, '\n\n')
+        .replace(/<\/li>/gi, '\n')
+        .replace(/<li[^>]*>/gi, '- ')
+        .replace(/<\/?(ul|ol)[^>]*>/gi, '\n');
+
+    const lines = text.split('\n');
+    const html = [];
+    let inList = false;
+
+    const closeList = () => {
+        if (inList) {
+            html.push('</ul>');
+            inList = false;
+        }
+    };
+
+    for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) {
+            closeList();
+            continue;
+        }
+
+        const bulletMatch = line.match(/^[-•*]\s+(.+)$/);
+        if (bulletMatch) {
+            if (!inList) {
+                html.push('<ul>');
+                inList = true;
+            }
+            html.push(`<li>${formatInline(bulletMatch[1])}</li>`);
+            continue;
+        }
+
+        closeList();
+        html.push(`<p>${formatInline(line)}</p>`);
+    }
+
+    closeList();
+    return markup(html.join(''));
+}
 
 /**
  * ChatbotMessage — renders a single chat message bubble.
@@ -36,18 +104,6 @@ export class ChatbotMessage extends Component {
     }
 
     get formattedContent() {
-        let text = this.props.content || '';
-        // Convert markdown-like formatting
-        // Bold: **text** → <strong>text</strong>
-        text = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-        // Italic: *text* → <em>text</em>
-        text = text.replace(/(^|[^*])\*([^*]+?)\*(?!\*)/g, '$1<em>$2</em>');
-        // Bullet points: • or - at start of line
-        text = text.replace(/^[•\-]\s+(.+)$/gm, '<li>$1</li>');
-        // Wrap consecutive <li> in <ul>
-        text = text.replace(/((?:<li>.*<\/li>\s*)+)/g, '<ul>$1</ul>');
-        // Line breaks
-        text = text.replace(/\n/g, '<br/>');
-        return text;
+        return renderMessageHtml(this.props.content || '');
     }
 }

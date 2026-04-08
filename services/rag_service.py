@@ -136,8 +136,9 @@ class RAGService:
                 metadata.append({
                     'id': article['id'],
                     'name': article['name'],
+                    'category': article.get('category', 'general'),
                     'summary': article.get('content_summary', ''),
-                    'content': article['content'][:2000],  # Limit context size
+                    'content': article['content'][:1800],  # Balanced context depth vs model latency
                 })
 
         if not embeddings:
@@ -202,6 +203,7 @@ class RAGService:
             results.append({
                 'id': meta['id'],
                 'name': meta['name'],
+                'category': meta.get('category', 'general'),
                 'summary': meta['summary'],
                 'content': meta['content'],
                 'score': float(1.0 / (1.0 + distances[0][i])),  # Convert L2 to similarity
@@ -234,6 +236,7 @@ class RAGService:
             {
                 'id': meta['id'],
                 'name': meta['name'],
+                'category': meta.get('category', 'general'),
                 'summary': meta['summary'],
                 'content': meta['content'],
                 'score': float(score / max(len(query_words), 1)),

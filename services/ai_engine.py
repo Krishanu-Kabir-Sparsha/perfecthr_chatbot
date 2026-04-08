@@ -8,6 +8,7 @@ using Mistral 7B, LLaMA 3, or Phi-3 models.
 import json
 import logging
 import time
+import threading
 
 import requests
 
@@ -31,10 +32,39 @@ class OllamaEngine:
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.system_prompt = system_prompt
-        self._generation_timeout = 60
+        self._generation_timeout = 32
         self._embedding_timeout = 30
-        self._retry_count = 3
-        self._retry_delay = 2
+        self._retry_count = 2
+        self._retry_delay = 1
+        self._resolved_model = None
+        self._last_model_refresh = 0
+        self._model_refresh_ttl = 120
+        self._model_lock = threading.Lock()
+        self._session = requests.Session()
+
+    def _resolve_model_name(self, force=False):
+        """Resolve configured model to an installed Ollama tag (e.g. mistral -> mistral:latest)."""
+        now = time.time()
+        if not force and self._resolved_model and (now - self._last_model_refresh) < self._model_refresh_ttl:
+            return self._resolved_model
+
+        with self._model_lock:
+            now = time.time()
+            if not force and self._resolved_model and (now - self._last_model_refresh) < self._model_refresh_ttl:
+                return self._resolved_model
+            try:
+                resp = self._session.get(f'{self.ollama_url}/api/tags', timeout=8)
+                resp.raise_for_status()
+                names = [m.get('name', '') for m in resp.json().get('models', [])]
+                exact = next((n for n in names if n == self.model), None)
+                prefixed = next((n for n in names if n.startswith(f'{self.model}:')), None)
+                self._resolved_model = exact or prefixed or self.model
+                self._last_model_refresh = now
+            except Exception as e:
+                _logger.warning('Model resolution failed, using configured model %s: %s', self.model, e)
+                self._resolved_model = self.model
+                self._last_model_refresh = now
+            return self._resolved_model
 
     # ── Health Check ────────────────────────────────────────────────
     def is_available(self):
@@ -51,7 +81,7 @@ class OllamaEngine:
     def list_models(self):
         """List available models on the Ollama server."""
         try:
-            resp = requests.get(
+            resp = self._session.get(
                 f'{self.ollama_url}/api/tags',
                 timeout=10,
             )
@@ -65,9 +95,10 @@ class OllamaEngine:
     def get_model_info(self):
         """Get info about the current model."""
         try:
-            resp = requests.post(
+            model = self._resolve_model_name()
+            resp = self._session.post(
                 f'{self.ollama_url}/api/show',
-                json={'name': self.model},
+                json={'name': model},
                 timeout=10,
             )
             resp.raise_for_status()
@@ -95,8 +126,10 @@ class OllamaEngine:
             system_content += (
                 '\n\n--- KNOWLEDGE BASE CONTEXT ---\n'
                 'Use the following information to answer the user\'s question. '
-                'If the answer is not in the context, say you don\'t have specific '
-                'information but offer general guidance.\n\n'
+                'Read category, summary, and content carefully, then produce a synthesized answer in your own words. '
+                'Avoid copying raw article lines unless quoting a short exact fact is necessary. '
+                'Cover the important points comprehensively but clearly. '
+                'If the answer is not fully in the context, provide best-effort guidance and suggest human follow-up.\n\n'
                 f'{context_text}\n'
                 '--- END CONTEXT ---'
             )
@@ -115,10 +148,12 @@ class OllamaEngine:
                 'content': msg.get('content', ''),
             })
 
+        model_name = self._resolve_model_name()
         payload = {
-            'model': self.model,
+            'model': model_name,
             'messages': ollama_messages,
             'stream': False,
+            'keep_alive': '10m',
             'options': {
                 'num_predict': self.max_tokens,
                 'temperature': self.temperature,
@@ -147,10 +182,12 @@ class OllamaEngine:
             full_prompt += f"Context:\n{context_text}\n\n"
         full_prompt += f"User: {prompt}\n\nAssistant:"
 
+        model_name = self._resolve_model_name()
         payload = {
-            'model': self.model,
+            'model': model_name,
             'prompt': full_prompt,
             'stream': False,
+            'keep_alive': '10m',
             'options': {
                 'num_predict': self.max_tokens,
                 'temperature': self.temperature,
@@ -173,7 +210,7 @@ class OllamaEngine:
         """
         embed_model = model or 'nomic-embed-text'
         try:
-            resp = requests.post(
+            resp = self._session.post(
                 f'{self.ollama_url}/api/embeddings',
                 json={
                     'model': embed_model,
@@ -195,7 +232,7 @@ class OllamaEngine:
 
         for attempt in range(self._retry_count):
             try:
-                resp = requests.post(
+                resp = self._session.post(
                     f'{self.ollama_url}{endpoint}',
                     json=payload,
                     timeout=self._generation_timeout,
@@ -233,12 +270,13 @@ class OllamaEngine:
                 _logger.error('Ollama HTTP error: %s', e)
                 # Check if model not found
                 if e.response and e.response.status_code == 404:
+                    self._resolve_model_name(force=True)
                     return {
                         'response': (
-                            f"The AI model '{self.model}' is not installed. "
+                            f"The AI model '{self._resolved_model or self.model}' is not installed. "
                             "Please ask an administrator to pull the model in Settings."
                         ),
-                        'model': self.model,
+                        'model': self._resolved_model or self.model,
                         'duration_ms': int((time.time() - start_time) * 1000),
                         'success': False,
                     }

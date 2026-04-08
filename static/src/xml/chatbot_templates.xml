@@ -30,7 +30,7 @@
 
             <!-- Bubble -->
             <div class="phr-chat-bubble">
-                <div class="phr-chat-bubble__content" t-raw="formattedContent"/>
+                <div class="phr-chat-bubble__content" t-out="formattedContent"/>
                 <div class="phr-chat-bubble__time" t-if="formattedTime">
                     <t t-esc="formattedTime"/>
                 </div>

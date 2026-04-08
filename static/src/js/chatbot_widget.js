@@ -2,6 +2,7 @@
 
 import { Component, useState, useRef, onMounted, onWillUnmount, whenReady } from "@odoo/owl";
 import { mountComponent } from "@web/env";
+import publicRootReady from "root.widget";
 import { ChatbotMessage } from "./chatbot_message";
 import { ChatbotService } from "./chatbot_service";
 
@@ -42,8 +43,11 @@ export class ChatbotWidget extends Component {
             unreadCount: 0,
         });
 
-        onMounted(() => {
-            this._restoreSession();
+        onMounted(async () => {
+            await this._restoreSession();
+            if (!this.state.sessionToken) {
+                await this._ensureSession();
+            }
         });
 
         onWillUnmount(() => {
@@ -88,6 +92,39 @@ export class ChatbotWidget extends Component {
         }
     }
 
+    async _ensureSession(forceNew = false) {
+        if (this.state.sessionToken && !forceNew) {
+            return true;
+        }
+
+        if (forceNew) {
+            this.state.sessionToken = null;
+            this.state.leadCaptured = false;
+        }
+
+        if (this.state.isTyping) {
+            return false;
+        }
+
+        const result = await this.chatService.startSession();
+        if (result.status === 'success') {
+            this.state.sessionToken = result.session_token;
+            if (!this.state.messages.length || forceNew) {
+                this.state.messages = [{
+                    role: 'assistant',
+                    content: result.greeting,
+                    timestamp: new Date().toISOString(),
+                    intent: 'greeting',
+                }];
+            }
+            this._saveSession();
+            return true;
+        }
+
+        this.state.connectionError = true;
+        return false;
+    }
+
     // ── Chat Actions ────────────────────────────────────────────────
     async toggleChat() {
         this.state.isOpen = !this.state.isOpen;
@@ -97,7 +134,7 @@ export class ChatbotWidget extends Component {
             this.state.unreadCount = 0;
 
             if (!this.state.sessionToken) {
-                await this._startNewSession();
+                await this._ensureSession();
             }
 
             // Auto-scroll after render
@@ -149,11 +186,27 @@ export class ChatbotWidget extends Component {
         const text = this.state.inputText.trim();
         if (!text || this.state.isTyping) return;
 
+        if (!this.state.sessionToken) {
+            const sessionReady = await this._ensureSession();
+            if (!sessionReady || !this.state.sessionToken) {
+                this.state.messages.push({
+                    role: 'assistant',
+                    content: "I'm having trouble starting the conversation right now. Please refresh the page and try again.",
+                    timestamp: new Date().toISOString(),
+                    intent: 'error',
+                });
+                this._scrollToBottom();
+                return;
+            }
+        }
+
+        const userSentAt = new Date().toISOString();
+
         // Add user message
         this.state.messages.push({
             role: 'user',
             content: text,
-            timestamp: new Date().toISOString(),
+            timestamp: userSentAt,
         });
         this.state.inputText = '';
         this.state.isTyping = true;
@@ -161,10 +214,20 @@ export class ChatbotWidget extends Component {
         this._scrollToBottom();
 
         // Send to backend
-        const result = await this.chatService.sendMessage(
+        let result = await this.chatService.sendMessage(
             this.state.sessionToken,
             text,
         );
+
+        if (
+            result.status === 'error' &&
+            (result.code === 'timeout' || /invalid or expired session/i.test(result.error || ''))
+        ) {
+            const sessionReady = await this._ensureSession(true);
+            if (sessionReady && this.state.sessionToken) {
+                result = await this.chatService.sendMessage(this.state.sessionToken, text);
+            }
+        }
 
         this.state.isTyping = false;
 
@@ -172,7 +235,7 @@ export class ChatbotWidget extends Component {
             this.state.messages.push({
                 role: 'assistant',
                 content: result.response,
-                timestamp: new Date().toISOString(),
+                timestamp: result.assistant_timestamp || new Date().toISOString(),
                 intent: result.intent,
             });
 
@@ -187,16 +250,48 @@ export class ChatbotWidget extends Component {
                 this.state.unreadCount++;
             }
         } else {
-            this.state.messages.push({
-                role: 'assistant',
-                content: result.error || "Sorry, I couldn't process your message. Please try again.",
-                timestamp: new Date().toISOString(),
-                intent: 'error',
-            });
+            const recovered = await this._recoverLatestReply(userSentAt, 4, 1500);
+            if (!recovered) {
+                this.state.messages.push({
+                    role: 'assistant',
+                    content: result.error || "Sorry, I couldn't process your message. Please try again.",
+                    timestamp: new Date().toISOString(),
+                    intent: 'error',
+                });
+            }
         }
 
         this._scrollToBottom();
         this._saveSession();
+    }
+
+    async _recoverLatestReply(userSentAt, retries = 0, delayMs = 0) {
+        if (!this.state.sessionToken) {
+            return false;
+        }
+        for (let attempt = 0; attempt <= retries; attempt++) {
+            const history = await this.chatService.getHistory(this.state.sessionToken);
+            if (history.status === 'success' && Array.isArray(history.messages)) {
+                const latestAssistant = [...history.messages]
+                    .reverse()
+                    .find(m => m.role === 'assistant' && m.timestamp && m.timestamp >= userSentAt);
+
+                if (latestAssistant) {
+                    this.state.messages = history.messages.map(m => ({
+                        role: m.role,
+                        content: m.content,
+                        timestamp: m.timestamp,
+                        intent: m.intent,
+                    }));
+                    return true;
+                }
+            }
+
+            if (attempt < retries && delayMs > 0) {
+                await new Promise(resolve => setTimeout(resolve, delayMs));
+            }
+        }
+        return false;
     }
 
     onInputKeydown(ev) {
@@ -309,7 +404,14 @@ export class ChatbotWidget extends Component {
 // ── Auto-mount on website pages ────────────────────────────────────
 whenReady(() => {
     const container = document.getElementById('perfecthr-chatbot-root');
-    if (container) {
-        mountComponent(ChatbotWidget, container);
+    if (!container) {
+        return;
     }
+
+    publicRootReady.then(() => {
+        const env = Component.env || window.odoo?.__WOWL_DEBUG__?.root?.env;
+        if (env) {
+            mountComponent(ChatbotWidget, container, { env });
+        }
+    });
 });
