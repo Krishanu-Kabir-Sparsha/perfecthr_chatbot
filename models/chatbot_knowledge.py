@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 import json
 import logging
+import base64
+import pickle
+
+import numpy as np
 
 from odoo import api, fields, models, _
 from odoo.exceptions import UserError
@@ -110,9 +114,10 @@ class ChatbotKnowledge(models.Model):
             try:
                 embedding = rag.embed_text(rec.content)
                 if embedding is not None:
-                    import pickle
+                    vector = np.array(embedding, dtype=np.float32)
+                    serialized = pickle.dumps(vector)
                     rec.sudo().write({
-                        'embedding_data': pickle.dumps(embedding),
+                        'embedding_data': base64.b64encode(serialized),
                         'last_embedded_at': fields.Datetime.now(),
                         'embedding_model': embedding_model,
                     })

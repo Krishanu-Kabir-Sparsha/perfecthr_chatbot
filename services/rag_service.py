@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 RAG (Retrieval-Augmented Generation) Service for Perfect HR Chatbot.
 
@@ -10,6 +10,7 @@ import logging
 import os
 import pickle
 import threading
+import base64
 
 import numpy as np
 
@@ -29,7 +30,8 @@ class RAGService:
         self.embedding_model = embedding_model
         self.data_dir = data_dir or '/tmp/chatbot_faiss'
         self._index = None
-        self._metadata = []  # List of (article_id, title, content_summary)
+        self._metadata = []  # Vector-indexed metadata (1:1 with FAISS vectors)
+        self._keyword_metadata = []  # Full article corpus for keyword fallback
         self._dimension = None
         self._faiss = None
         self._st_model = None  # Sentence-transformers fallback
@@ -40,12 +42,11 @@ class RAGService:
             self._faiss = faiss
             _logger.info('FAISS loaded successfully')
         except ImportError:
-            _logger.warning(
-                'faiss-cpu not installed. Vector search will be unavailable. '
-                'Install with: pip install faiss-cpu'
+            _logger.info(
+                'faiss-cpu not installed. Using keyword fallback + Ollama generation only.'
             )
 
-    # ── Embedding ───────────────────────────────────────────────────
+    # â”€â”€ Embedding â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def embed_text(self, text):
         """
         Generate embedding vector for text.
@@ -69,6 +70,28 @@ class RAGService:
         """Generate embedding using Ollama API."""
         try:
             import requests
+            # Ollama current API: /api/embed with "input"
+            resp = requests.post(
+                f'{self.ollama_url}/api/embed',
+                json={
+                    'model': self.embedding_model,
+                    'input': text,
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            embeddings = data.get('embeddings') or []
+            if embeddings and isinstance(embeddings, list):
+                first = embeddings[0]
+                if first:
+                    return first
+        except Exception as e:
+            _logger.warning('Ollama /api/embed failed, trying legacy endpoint: %s', e)
+
+        try:
+            import requests
+            # Legacy Ollama endpoint retained for backward compatibility
             resp = requests.post(
                 f'{self.ollama_url}/api/embeddings',
                 json={
@@ -86,6 +109,54 @@ class RAGService:
             _logger.warning('Ollama embedding failed, trying fallback: %s', e)
         return None
 
+    def set_keyword_corpus(self, articles):
+        """Update full article corpus used by keyword fallback search."""
+        self._keyword_metadata = [
+            {
+                'id': article['id'],
+                'name': article['name'],
+                'category': article.get('category', 'general'),
+                'summary': article.get('content_summary', ''),
+                'version': int(article.get('version', 1) or 1),
+                'content': article.get('content', ''),
+            }
+            for article in (articles or [])
+            if article.get('id')
+        ]
+
+    def _deserialize_embedding(self, raw_embedding):
+        """Deserialize embedding payload from Odoo Binary field safely."""
+        if not raw_embedding:
+            return None
+
+        candidates = []
+        if isinstance(raw_embedding, str):
+            candidates.append(raw_embedding.encode('utf-8'))
+        elif isinstance(raw_embedding, (bytes, bytearray)):
+            candidates.append(bytes(raw_embedding))
+        else:
+            return None
+
+        # Try both direct pickle bytes and base64-encoded pickle.
+        expanded = []
+        for item in candidates:
+            expanded.append(item)
+            try:
+                expanded.append(base64.b64decode(item, validate=False))
+            except Exception:
+                pass
+
+        for payload in expanded:
+            try:
+                embedding = pickle.loads(payload)
+                if embedding is None:
+                    continue
+                return np.array(embedding, dtype=np.float32)
+            except Exception:
+                continue
+
+        return None
+
     def _embed_via_st(self, text):
         """Fallback: Generate embedding using sentence-transformers."""
         try:
@@ -101,7 +172,7 @@ class RAGService:
             _logger.error('sentence-transformers embedding failed: %s', e)
         return None
 
-    # ── Index Management ────────────────────────────────────────────
+    # â”€â”€ Index Management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def build_index(self, articles):
         """
         Build FAISS index from knowledge base articles.
@@ -115,7 +186,10 @@ class RAGService:
             return False
 
         embeddings = []
-        metadata = []
+        vector_metadata = []
+
+        # Keep full corpus for keyword fallback, including not-yet-embedded articles.
+        self.set_keyword_corpus(articles)
 
         for article in articles:
             embedding = None
@@ -123,9 +197,8 @@ class RAGService:
             # Use ONLY pre-computed embeddings to avoid blocking user requests.
             # Articles without embeddings should be embedded via cron or manual action.
             if article.get('embedding_data'):
-                try:
-                    embedding = pickle.loads(article['embedding_data'])
-                except Exception:
+                embedding = self._deserialize_embedding(article['embedding_data'])
+                if embedding is None:
                     _logger.warning(
                         'Failed to deserialize embedding for article %s (id=%s)',
                         article.get('name', '?'), article.get('id'),
@@ -133,24 +206,15 @@ class RAGService:
 
             if embedding is None:
                 _logger.debug(
-                    'Skipping article "%s" (id=%s) — no pre-computed embedding. '
+                    'Skipping article "%s" (id=%s) â€” no pre-computed embedding. '
                     'Run the auto-embed cron or embed manually.',
                     article.get('name', '?'), article.get('id'),
                 )
-                # Still add to metadata so keyword fallback can find it
-                metadata.append({
-                    'id': article['id'],
-                    'name': article['name'],
-                    'category': article.get('category', 'general'),
-                    'summary': article.get('content_summary', ''),
-                    'version': int(article.get('version', 1) or 1),
-                    'content': article['content'],
-                })
                 continue
 
             if embedding is not None:
                 embeddings.append(embedding)
-                metadata.append({
+                vector_metadata.append({
                     'id': article['id'],
                     'name': article['name'],
                     'category': article.get('category', 'general'),
@@ -160,7 +224,10 @@ class RAGService:
                 })
 
         if not embeddings:
-            _logger.warning('No embeddings generated for index')
+            with _index_lock:
+                self._index = None
+                self._metadata = []
+            _logger.warning('No embeddings available for vector index; using keyword fallback only')
             return False
 
         # Build FAISS index
@@ -170,7 +237,7 @@ class RAGService:
         with _index_lock:
             self._index = self._faiss.IndexFlatL2(self._dimension)
             self._index.add(vectors)
-            self._metadata = metadata
+            self._metadata = vector_metadata
 
         _logger.info(
             'FAISS index built: %d vectors, dimension %d',
@@ -231,14 +298,15 @@ class RAGService:
 
     def _keyword_fallback(self, query, top_k=3):
         """Simple keyword matching when FAISS is unavailable."""
-        if not self._metadata:
+        source = self._keyword_metadata or self._metadata
+        if not source:
             return []
 
         query_lower = query.lower()
         query_words = set(query_lower.split())
 
         scored = []
-        for meta in self._metadata:
+        for meta in source:
             content_lower = meta['content'].lower()
             name_lower = meta['name'].lower()
             # Calculate relevance by word overlap
@@ -281,7 +349,7 @@ class RAGService:
         except Exception:
             return False
 
-    # ── Persistence ─────────────────────────────────────────────────
+    # â”€â”€ Persistence â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _save_index(self):
         """Save FAISS index and metadata to disk."""
         if not self._faiss or not self._index:
@@ -322,3 +390,4 @@ class RAGService:
             )
         except Exception as e:
             _logger.error('Failed to load FAISS index: %s', e)
+
