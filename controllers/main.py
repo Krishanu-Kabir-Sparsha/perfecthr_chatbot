@@ -30,7 +30,7 @@ _RAG_SERVICE_CACHE = {}
 class PerfectHRChatbotController(http.Controller):
     """JSON-RPC endpoints for the chatbot frontend widget."""
 
-    # â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Helpers ─────────────────────────────────────────────────────
     def _get_config(self):
         """Fetch chatbot configuration from system parameters."""
         ICP = request.env['ir.config_parameter'].sudo()
@@ -52,7 +52,7 @@ class PerfectHRChatbotController(http.Controller):
             )),
             'greeting_message': ICP.get_param(
                 'perfecthr_chatbot.greeting_message',
-                "ðŸ‘‹ Hi there! I'm your Perfect HR AI Assistant. How can I help you today?"
+                "👋 Hi there! I'm your Perfect HR AI Assistant. How can I help you today?"
             ),
             'system_prompt': ICP.get_param(
                 'perfecthr_chatbot.system_prompt', ''
@@ -177,7 +177,7 @@ class PerfectHRChatbotController(http.Controller):
     def _trim_article_content(self, text, max_chars=8000):
         """Clip article text to keep within context window while preserving structure.
 
-        Default increased to 8000 chars â€” Mistral 7B handles ~24K chars (8K tokens).
+        Default increased to 8000 chars — Mistral 7B handles ~24K chars (8K tokens).
         No artificial word limitations.
         """
         if not text:
@@ -323,12 +323,12 @@ class PerfectHRChatbotController(http.Controller):
                 # Keep keyword fallback corpus in sync with current KB.
                 rag_service.set_keyword_corpus(article_data)
 
-                # Load persisted index â€” do NOT rebuild inline to avoid blocking.
+                # Load persisted index — do NOT rebuild inline to avoid blocking.
                 if rag_service._index is None:
                     rag_service._load_index()
 
                 # Only rebuild from pre-computed embeddings (fast operation).
-                # This will NOT call Ollama for embedding â€” articles without
+                # This will NOT call Ollama for embedding — articles without
                 # embeddings are skipped and included only via keyword fallback.
                 if (
                     rag_service._index is None
@@ -381,11 +381,11 @@ class PerfectHRChatbotController(http.Controller):
 
             if candidates:
                 candidates.sort(key=lambda item: item['total'], reverse=True)
-                top_results = candidates[:3]
+                top_results = candidates[:5]
 
                 context_parts = []
                 sources = []
-                context_char_budget = 5000
+                context_char_budget = 16000
                 used_chars = 0
                 for idx, r in enumerate(top_results):
                     summary = (r.get('summary') or '').strip()
@@ -395,11 +395,11 @@ class PerfectHRChatbotController(http.Controller):
 
                     # Tiered content budget: top-1 gets full, 2-3 get 6000, 4-5 get summary only
                     if idx == 0:
-                        clipped_content = self._trim_article_content(r.get('content', ''), max_chars=2500)
+                        clipped_content = self._trim_article_content(r.get('content', ''), max_chars=12000)
                     elif idx <= 2:
-                        clipped_content = self._trim_article_content(r.get('content', ''), max_chars=1200)
+                        clipped_content = self._trim_article_content(r.get('content', ''), max_chars=6000)
                     else:
-                        clipped_content = summary[:500]
+                        clipped_content = summary
 
                     category = r.get('category', 'general')
                     block = (
@@ -532,31 +532,13 @@ class PerfectHRChatbotController(http.Controller):
                     "Recommendation: start with this plan and adjust after a 30-day pilot based on adoption and support needs."
                 )
 
-        # Return a concise synthesized summary from the best-matched article.
+        # Return full content from the best-matched article.
         primary = parsed_articles[0]
         summary_text = primary['summary'] if primary['summary'] else 'Here is what I found:'
-        content_lines = [
-            ln.strip('- ').strip()
-            for ln in primary['content'].splitlines()
-            if ln.strip() and not ln.strip().startswith('Q:') and not ln.strip().startswith('A:')
-        ]
-        key_points = []
-        for ln in content_lines:
-            if len(ln) > 25:
-                key_points.append(ln)
-            if len(key_points) >= 4:
-                break
-
-        if key_points:
-            bullets = '\n'.join(f"- {point}" for point in key_points)
-            return (
-                f"{summary_text}\n\n"
-                f"{bullets}\n\n"
-                "For more specific recommendations, please contact our support team."
-            )
 
         return (
             f"{summary_text}\n\n"
+            f"{primary['content']}\n\n"
             "For more specific recommendations, please contact our support team."
         )
 
@@ -568,7 +550,7 @@ class PerfectHRChatbotController(http.Controller):
             "If you would like, I can hand this to our support team and share your query with them."
         )
 
-    # â”€â”€ Endpoints â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Endpoints ───────────────────────────────────────────────────
 
     @http.route('/perfecthr_chatbot/start', type='json', auth='public',
                 website=True, csrf=False)
@@ -673,7 +655,7 @@ class PerfectHRChatbotController(http.Controller):
         # Build conversation history for multi-turn
         history_msgs = Message.search([
             ('session_id', '=', session.id),
-        ], order='id desc', limit=4)
+        ], order='id desc', limit=10)
 
         chat_messages = []
         for msg in history_msgs[::-1]:
@@ -726,8 +708,8 @@ class PerfectHRChatbotController(http.Controller):
         response_guidance = (
             "CRITICAL SYNTHESIS RULES:\n"
             "1. READ the provided knowledge base articles carefully.\n"
-            "2. SYNTHESIZE and REWRITE the information in your own words â€” do NOT copy-paste article text.\n"
-            "3. Use ONLY facts from the provided context â€” no external knowledge or invention.\n"
+            "2. SYNTHESIZE and REWRITE the information in your own words — do NOT copy-paste article text.\n"
+            "3. Use ONLY facts from the provided context — no external knowledge or invention.\n"
             "4. Organize the answer logically with clear structure (bullet points, paragraphs as appropriate).\n"
             "5. Address the user's specific question comprehensively and directly.\n"
             "6. Be concise, professional, and helpful.\n\n"
@@ -746,7 +728,7 @@ class PerfectHRChatbotController(http.Controller):
         )
 
         if not result.get('success') or not (result.get('response') or '').strip():
-            # Model failed â€” build a deterministic KB reply directly.
+            # Model failed — build a deterministic KB reply directly.
             # Do NOT make a second AI call (_rewrite_in_language) to avoid
             # doubling response time in failure scenarios.
             fallback_text = self._build_rule_based_reply(
@@ -882,7 +864,7 @@ class PerfectHRChatbotController(http.Controller):
             # Log message on lead
             lead.message_post(
                 body=_(
-                    'ðŸ¤– Lead created by AI Chatbot<br/>'
+                    '🤖 Lead created by AI Chatbot<br/>'
                     'Session: %s<br/>'
                     'Qualification Score: %d/100<br/>'
                     'Messages: %d'
@@ -963,90 +945,3 @@ class PerfectHRChatbotController(http.Controller):
             'greeting_message': config['greeting_message'],
             'auto_create_lead': config['auto_create_lead'],
         }
-
-    @http.route('/perfecthr_chatbot/diagnostic', type='http', auth='public',
-                website=True, csrf=False, methods=['GET'])
-    def diagnostic_test(self, **kwargs):
-        """Full diagnostic test of Ollama connectivity and chat pipeline."""
-        import json as _json
-        from werkzeug.wrappers import Response
-
-        config = self._get_config()
-        ai_engine = self._get_ai_engine(config)
-
-        diagnostics = {
-            'timestamp': fields.Datetime.now().isoformat(),
-            'ollama_url': config['ollama_url'],
-            'model_name': config['model_name'],
-            'embedding_model': config['embedding_model'],
-        }
-
-        try:
-            is_available = ai_engine.is_available()
-            diagnostics['connectivity'] = {
-                'status': 'ok' if is_available else 'unreachable',
-                'reachable': is_available,
-            }
-        except Exception as e:
-            diagnostics['connectivity'] = {
-                'status': 'error',
-                'error': str(e),
-            }
-
-        try:
-            models = ai_engine.list_models()
-            diagnostics['available_models'] = models
-            diagnostics['model_loaded'] = any(
-                config['model_name'] in m or m.startswith(f"{config['model_name']}:")
-                for m in models
-            )
-        except Exception as e:
-            diagnostics['available_models'] = []
-            diagnostics['model_loaded'] = False
-            diagnostics['models_error'] = str(e)
-
-        try:
-            test_result = ai_engine.chat(
-                [{'role': 'user', 'content': 'Reply with exactly: OK'}],
-                context_text='',
-                language_hint='en',
-                max_tokens=20,
-                force_synthesis=True,
-            )
-            diagnostics['chat_test'] = {
-                'success': test_result.get('success', False),
-                'model_used': test_result.get('model', '?'),
-                'duration_ms': test_result.get('duration_ms', 0),
-                'error_type': test_result.get('error_type'),
-                'response_len': len(test_result.get('response', '')),
-                'response_preview': test_result.get('response', '')[:100],
-            }
-        except Exception as e:
-            diagnostics['chat_test'] = {
-                'success': False,
-                'error': str(e),
-            }
-
-        chat_ok = diagnostics.get('chat_test', {}).get('success', False)
-        connected = diagnostics.get('connectivity', {}).get('reachable', False)
-
-        if chat_ok:
-            status = 'healthy'
-        elif connected and diagnostics.get('model_loaded'):
-            status = 'connected_but_chat_failed'
-        elif connected:
-            status = 'connected_model_missing'
-        else:
-            status = 'unreachable'
-
-        payload = {
-            'status': status,
-            'diagnostics': diagnostics,
-            'message': (
-                'Ollama is working correctly!' if status == 'healthy'
-                else 'Ollama connection issue detected. See diagnostics details.'
-            ),
-        }
-        return Response(_json.dumps(payload, ensure_ascii=False, indent=2), mimetype='application/json')
-
-
