@@ -6,7 +6,7 @@
 export class ChatbotService {
     constructor() {
         this.baseUrl = '';
-        this.requestTimeoutMs = 35000;
+        this.requestTimeoutMs = 75000;
     }
 
     async _jsonRpc(endpoint, params = {}) {
@@ -43,7 +43,7 @@ export class ChatbotService {
             if (error.name === 'AbortError') {
                 return {
                     status: 'error',
-                    error: 'The request is taking longer than expected. Please wait a moment.',
+                    error: 'The response is taking longer than expected. Retrying may help.',
                     code: 'timeout',
                 };
             }

@@ -25,6 +25,7 @@ export class ChatbotWidget extends Component {
             messages: [],
             inputText: '',
             isTyping: false,
+            longWaitMessage: '',
             sessionToken: null,
             leadCaptured: false,
             showLeadForm: false,
@@ -42,6 +43,8 @@ export class ChatbotWidget extends Component {
             connectionError: false,
             unreadCount: 0,
         });
+
+        this._longWaitTimer = null;
 
         onMounted(async () => {
             await this._restoreSession();
@@ -210,8 +213,16 @@ export class ChatbotWidget extends Component {
         });
         this.state.inputText = '';
         this.state.isTyping = true;
+        this.state.longWaitMessage = '';
         this.state.connectionError = false;
         this._scrollToBottom();
+
+        // Show long-wait message after 8 seconds
+        this._longWaitTimer = setTimeout(() => {
+            if (this.state.isTyping) {
+                this.state.longWaitMessage = 'The request is taking longer than expected. Please wait a moment.';
+            }
+        }, 8000);
 
         // Send to backend
         let result = await this.chatService.sendMessage(
@@ -229,7 +240,13 @@ export class ChatbotWidget extends Component {
             }
         }
 
+        // Clear long-wait timer
+        if (this._longWaitTimer) {
+            clearTimeout(this._longWaitTimer);
+            this._longWaitTimer = null;
+        }
         this.state.isTyping = false;
+        this.state.longWaitMessage = '';
 
         if (result.status === 'success') {
             this.state.messages.push({
@@ -250,7 +267,8 @@ export class ChatbotWidget extends Component {
                 this.state.unreadCount++;
             }
         } else {
-            const recovered = await this._recoverLatestReply(userSentAt, 4, 1500);
+            // Always try history recovery before showing error
+            const recovered = await this._recoverLatestReply(userSentAt, 6, 3000);
             if (!recovered) {
                 this.state.messages.push({
                     role: 'assistant',

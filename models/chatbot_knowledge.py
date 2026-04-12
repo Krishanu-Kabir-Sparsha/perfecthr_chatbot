@@ -70,12 +70,17 @@ class ChatbotKnowledge(models.Model):
     def write(self, vals):
         """Increment version on content change and clear embedding."""
         if 'content' in vals:
+            # Content changed — bump version and clear embedding.
+            # Merge version/embedding-clearing into the vals dict to
+            # avoid nested write() calls (which risk recursion).
+            new_vals = dict(vals)
+            new_vals['embedding_data'] = False
+            new_vals['last_embedded_at'] = False
+            # Since each record may have a different version, we need per-record handling.
             for rec in self:
-                vals_copy = dict(vals)
-                vals_copy['version'] = rec.version + 1
-                vals_copy['embedding_data'] = False
-                vals_copy['last_embedded_at'] = False
-                super(ChatbotKnowledge, rec).write(vals_copy)
+                per_rec_vals = dict(new_vals)
+                per_rec_vals['version'] = rec.version + 1
+                super(ChatbotKnowledge, rec).write(per_rec_vals)
             return True
         return super().write(vals)
 
@@ -139,7 +144,7 @@ class ChatbotKnowledge(models.Model):
         articles = self.search([
             ('is_active', '=', True),
             ('is_embedded', '=', False),
-        ], limit=50)
+        ], limit=100)
         if articles:
             articles.action_embed()
         return True

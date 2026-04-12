@@ -26,14 +26,14 @@ class OllamaEngine:
     """Dedicated Ollama LLM integration for Perfect HR Chatbot."""
 
     def __init__(self, ollama_url='http://localhost:11434', model='mistral',
-                 max_tokens=512, temperature=0.7, system_prompt=''):
+                 max_tokens=2048, temperature=0.7, system_prompt=''):
         self.ollama_url = ollama_url.rstrip('/')
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.system_prompt = system_prompt
-        self._generation_timeout = 32
-        self._embedding_timeout = 30
+        self._generation_timeout = 60
+        self._embedding_timeout = 60
         self._retry_count = 2
         self._retry_delay = 1
         self._resolved_model = None
@@ -108,7 +108,8 @@ class OllamaEngine:
             return {}
 
     # ── Chat Completion ─────────────────────────────────────────────
-    def chat(self, messages, context_text=''):
+    def chat(self, messages, context_text='', max_tokens=None, temperature=None,
+             language_hint=None, response_guidance=''):
         """
         Multi-turn conversation using Ollama /api/chat endpoint.
 
@@ -116,37 +117,112 @@ class OllamaEngine:
             messages: List of dicts with 'role' and 'content' keys.
                       Roles: 'user', 'assistant', 'system'
             context_text: Additional RAG context to include in system prompt.
+            language_hint: Language code or name for the response language.
+            response_guidance: Additional instructions for response formatting.
 
         Returns:
             dict: {'response': str, 'model': str, 'duration_ms': int, 'success': bool}
         """
-        # Build system message with RAG context
-        system_content = self.system_prompt or ''
-        if context_text:
-            system_content += (
-                '\n\n--- KNOWLEDGE BASE CONTEXT ---\n'
-                'Use the following information to answer the user\'s question. '
-                'Read category, summary, and content carefully, then produce a synthesized answer in your own words. '
-                'Avoid copying raw article lines unless quoting a short exact fact is necessary. '
-                'Cover the important points comprehensively but clearly. '
-                'If the answer is not fully in the context, provide best-effort guidance and suggest human follow-up.\n\n'
-                f'{context_text}\n'
-                '--- END CONTEXT ---'
+        normalized_hint = (language_hint or '').strip().lower()
+        is_non_english = normalized_hint and normalized_hint not in ('auto', 'en', 'english')
+
+        # Map ISO codes to full language names — Mistral 7B understands
+        # "Bengali" much better than "bn" in prompts.
+        _lang_names = {
+            'bn': 'Bengali (বাংলা)', 'hi': 'Hindi (हिन्दी)', 'ar': 'Arabic (العربية)',
+            'es': 'Spanish (Español)', 'fr': 'French (Français)', 'de': 'German (Deutsch)',
+            'pt': 'Portuguese (Português)', 'ru': 'Russian (Русский)', 'zh': 'Chinese (中文)',
+            'ja': 'Japanese (日本語)', 'ko': 'Korean (한국어)', 'tr': 'Turkish (Türkçe)',
+            'ur': 'Urdu (اردو)', 'it': 'Italian (Italiano)', 'nl': 'Dutch (Nederlands)',
+            'pl': 'Polish (Polski)', 'th': 'Thai (ไทย)', 'vi': 'Vietnamese (Tiếng Việt)',
+            'id': 'Indonesian (Bahasa Indonesia)', 'ms': 'Malay (Bahasa Melayu)',
+            'fa': 'Persian (فارسی)', 'sw': 'Swahili',
+        }
+        lang_display = _lang_names.get(normalized_hint, language_hint or 'English')
+
+        # ── Build a CONCISE system prompt ──
+        # For 7B models, shorter = better instruction following.
+        # Language directive goes FIRST in system prompt for maximum compliance.
+        sys_parts = []
+
+        # 1. LANGUAGE DIRECTIVE — top position (highest priority for small models)
+        if is_non_english:
+            sys_parts.append(
+                f'LANGUAGE RULE: You MUST write your ENTIRE response in {lang_display}. '
+                f'Every word, sentence, heading, and bullet point must be in {lang_display}. '
+                f'Do NOT use English. This is your #1 priority.'
+            )
+        else:
+            sys_parts.append(
+                'LANGUAGE RULE: Detect the language the user writes in, '
+                'then respond in that EXACT same language. '
+                'If the user writes in Bengali, respond in Bengali. '
+                'If in Spanish, respond in Spanish. '
+                'Only use English if the user writes in English.'
             )
 
-        # Prepare message list
-        ollama_messages = []
-        if system_content:
+        # 2. ROLE & BEHAVIOR — the configured system prompt
+        if self.system_prompt:
+            sys_parts.append(self.system_prompt)
+        else:
+            sys_parts.append(
+                'You are Perfect HR AI Assistant — a knowledgeable, professional digital '
+                'sales consultant. Answer questions about Perfect HR modules, pricing, '
+                'and features. Be concise, professional, and helpful.'
+            )
+
+        # 3. SYNTHESIS — prevent copy-pasting (short form)
+        if response_guidance:
+            sys_parts.append(response_guidance)
+        else:
+            sys_parts.append(
+                'When reference articles are provided, synthesize an original answer '
+                'in your own words. Do NOT copy-paste article text verbatim.'
+            )
+
+        system_content = '\n\n'.join(sys_parts)
+
+        # ── Build message list ──
+        ollama_messages = [{'role': 'system', 'content': system_content}]
+
+        # Add RAG context as a separate user-role reference message.
+        # This keeps the system prompt short and gives the model context
+        # in the "conversation" where it pays more attention.
+        if context_text:
             ollama_messages.append({
-                'role': 'system',
-                'content': system_content,
+                'role': 'user',
+                'content': (
+                    '[REFERENCE ARTICLES — use these to answer the next question]\n\n'
+                    f'{context_text}\n\n'
+                    '[END REFERENCE]'
+                ),
+            })
+            ollama_messages.append({
+                'role': 'assistant',
+                'content': 'I have read the reference articles and will use them to answer your question.',
             })
 
+        # Add conversation history (filter out any stray system messages)
         for msg in messages:
+            role = msg.get('role', 'user')
+            if role == 'system':
+                continue
             ollama_messages.append({
-                'role': msg.get('role', 'user'),
+                'role': role,
                 'content': msg.get('content', ''),
             })
+
+        # For non-English: INJECT language requirement into the LAST user message.
+        # This is critical — adding a separate user message creates two consecutive
+        # user turns which confuses Mistral 7B. Instead, we append the instruction
+        # directly to the user's own message so the model sees ONE coherent request.
+        if is_non_english:
+            for i in range(len(ollama_messages) - 1, -1, -1):
+                if ollama_messages[i]['role'] == 'user' and not ollama_messages[i]['content'].startswith('[REFERENCE'):
+                    ollama_messages[i]['content'] += (
+                        f'\n\n[RESPOND ENTIRELY IN {lang_display}. DO NOT USE ENGLISH.]'
+                    )
+                    break
 
         model_name = self._resolve_model_name()
         payload = {
@@ -155,32 +231,57 @@ class OllamaEngine:
             'stream': False,
             'keep_alive': '10m',
             'options': {
-                'num_predict': self.max_tokens,
-                'temperature': self.temperature,
+                'num_predict': max_tokens if max_tokens is not None else self.max_tokens,
+                'temperature': temperature if temperature is not None else self.temperature,
             },
         }
 
         return self._send_request('/api/chat', payload)
 
     # ── Single-Shot Generation ──────────────────────────────────────
-    def generate(self, prompt, context_text=''):
+    def generate(self, prompt, context_text='', language_hint=None):
         """
         Single-shot generation using Ollama /api/generate endpoint.
-        Used as fallback if /api/chat is not available.
+        Used as fallback if /api/chat is not available, or for
+        translation / rewriting tasks.
 
         Args:
             prompt: The user's prompt text.
             context_text: Additional RAG context.
+            language_hint: Language code or name for the response.
 
         Returns:
             dict: {'response': str, 'model': str, 'duration_ms': int, 'success': bool}
         """
-        full_prompt = ''
+        parts = []
+
+        # Language directive first — strongest position
+        normalized_hint = (language_hint or '').strip().lower()
+        if normalized_hint and normalized_hint not in ('auto', 'en', 'english'):
+            parts.append(
+                f"IMPORTANT: You MUST respond entirely in {language_hint}. "
+                f"Do NOT respond in English."
+            )
+        else:
+            parts.append(
+                "IMPORTANT: Detect the language of the user's prompt and respond ENTIRELY in that same language."
+            )
+
         if self.system_prompt:
-            full_prompt += f"System: {self.system_prompt}\n\n"
+            parts.append(f"System: {self.system_prompt}")
         if context_text:
-            full_prompt += f"Context:\n{context_text}\n\n"
-        full_prompt += f"User: {prompt}\n\nAssistant:"
+            parts.append(f"Context:\n{context_text}")
+
+        parts.append(f"User: {prompt}")
+
+        # Reinforce language at the end
+        if language_hint:
+            normalized = (language_hint or '').strip().lower()
+            if normalized and normalized not in ('en', 'english'):
+                parts.append(f"REMINDER: Respond in {language_hint}.")
+
+        parts.append("Assistant:")
+        full_prompt = '\n\n'.join(parts)
 
         model_name = self._resolve_model_name()
         payload = {
@@ -254,6 +355,7 @@ class OllamaEngine:
                     'model': data.get('model', self.model),
                     'duration_ms': elapsed_ms,
                     'success': True,
+                    'error_type': None,
                 }
 
             except requests.ConnectionError:
@@ -265,7 +367,13 @@ class OllamaEngine:
                     time.sleep(self._retry_delay)
             except requests.Timeout:
                 _logger.error('Ollama request timed out after %ds', self._generation_timeout)
-                break
+                return {
+                    'response': FALLBACK_MESSAGE,
+                    'model': self.model,
+                    'duration_ms': int((time.time() - start_time) * 1000),
+                    'success': False,
+                    'error_type': 'timeout',
+                }
             except requests.HTTPError as e:
                 _logger.error('Ollama HTTP error: %s', e)
                 # Check if model not found
@@ -279,11 +387,24 @@ class OllamaEngine:
                         'model': self._resolved_model or self.model,
                         'duration_ms': int((time.time() - start_time) * 1000),
                         'success': False,
+                        'error_type': 'model_not_found',
                     }
-                break
+                return {
+                    'response': FALLBACK_MESSAGE,
+                    'model': self.model,
+                    'duration_ms': int((time.time() - start_time) * 1000),
+                    'success': False,
+                    'error_type': 'http',
+                }
             except Exception as e:
                 _logger.error('Ollama unexpected error: %s', e)
-                break
+                return {
+                    'response': FALLBACK_MESSAGE,
+                    'model': self.model,
+                    'duration_ms': int((time.time() - start_time) * 1000),
+                    'success': False,
+                    'error_type': 'unknown',
+                }
 
         # All retries exhausted
         elapsed_ms = int((time.time() - start_time) * 1000)
@@ -292,4 +413,5 @@ class OllamaEngine:
             'model': self.model,
             'duration_ms': elapsed_ms,
             'success': False,
+            'error_type': 'connection',
         }

@@ -9,6 +9,15 @@ import re
 import time
 import uuid
 
+try:
+    from langdetect import detect, LangDetectException, DetectorFactory
+    DetectorFactory.seed = 0
+    LANGDETECT_AVAILABLE = True
+except Exception:
+    LANGDETECT_AVAILABLE = False
+    detect = None
+    LangDetectException = Exception
+
 from odoo import http, fields, _
 from odoo.http import request
 
@@ -16,6 +25,29 @@ _logger = logging.getLogger(__name__)
 
 _AI_ENGINE_CACHE = {}
 _RAG_SERVICE_CACHE = {}
+
+# Patterns that indicate the user is asking to switch language only
+_LANG_SWITCH_PATTERNS = [
+    # English explicit requests — broad to catch variations like "respond in Spanish",
+    # "reply in Bengali", "say it in French", "tell me in Arabic", etc.
+    re.compile(r'\b(?:respond|reply|answer|speak|say|tell|write|translate|convert)\s+(?:it\s+)?(?:me\s+)?(?:this\s+)?in\s+([a-zA-Z\- ]{2,30})', re.I),
+    re.compile(r'\b(?:switch|change|use)\s+(?:to\s+)?([a-zA-Z\- ]{2,30})\s*(?:language)?', re.I),
+    re.compile(r'\bin\s+(bengali|bangla|hindi|arabic|spanish|french|german|portuguese|russian|chinese|japanese|korean|urdu|turkish|italian)\b', re.I),
+    # Bengali — broad variations
+    re.compile(r'বাংলা', re.I),  # Contains "বাংলা" anywhere
+    # Hindi — broad variations
+    re.compile(r'हिन्दी|हिंदी', re.I),  # Contains "हिन्दी" or "हिंदी"
+    # Arabic
+    re.compile(r'بالعربي|العربية', re.I),
+    # Spanish
+    re.compile(r'en\s+español', re.I),
+    # French
+    re.compile(r'en\s+français', re.I),
+    # Generic: short messages in non-Latin scripts (likely language switch commands)
+    re.compile(r'^[\u0980-\u09FF\s\u0964\u0965]{3,60}$'),   # Bengali + Devanagari punctuation
+    re.compile(r'^[\u0900-\u097F\s\u0964\u0965]{3,60}$'),   # Hindi/Devanagari
+    re.compile(r'^[\u0600-\u06FF\s]{3,60}$'),                # Arabic
+]
 
 
 class PerfectHRChatbotController(http.Controller):
@@ -36,7 +68,7 @@ class PerfectHRChatbotController(http.Controller):
                 'perfecthr_chatbot.embedding_model', 'nomic-embed-text'
             ),
             'max_tokens': int(ICP.get_param(
-                'perfecthr_chatbot.max_tokens', '512'
+                'perfecthr_chatbot.max_tokens', '2048'
             )),
             'temperature': float(ICP.get_param(
                 'perfecthr_chatbot.temperature', '0.7'
@@ -105,6 +137,106 @@ class PerfectHRChatbotController(http.Controller):
             ('state', '=', 'active'),
         ], limit=1)
 
+    def _language_from_context(self):
+        """Return ISO language code from Odoo context (e.g. en, bn, ar)."""
+        lang_code = (request.env.context.get('lang') or 'en_US')
+        return lang_code.split('_')[0].lower()
+
+    def _detect_script_language(self, text):
+        """Best-effort script detection for short multilingual messages."""
+        for ch in (text or ''):
+            code = ord(ch)
+            if 0x0980 <= code <= 0x09FF:
+                return 'bn'  # Bengali
+            if 0x0600 <= code <= 0x06FF:
+                return 'ar'  # Arabic
+            if 0x0900 <= code <= 0x097F:
+                return 'hi'  # Devanagari (Hindi/Nepali)
+            if 0x0400 <= code <= 0x04FF:
+                return 'ru'  # Cyrillic (best-effort)
+            if 0x4E00 <= code <= 0x9FFF:
+                return 'zh'  # CJK Unified Ideographs
+        return None
+
+    def _infer_response_language(self, message, session=None):
+        """Infer preferred response language code/name dynamically."""
+        text = (message or '').strip()
+        text_lower = text.lower()
+
+        # Explicit request patterns without hardcoding fixed language list.
+        explicit_patterns = [
+            r'\b(?:respond|reply|answer)\s+in\s+([a-zA-Z\- ]{2,30})',
+            r'\b(?:response\s+language|language)\s*[:=]\s*([a-zA-Z\- ]{2,30})',
+        ]
+        for pattern in explicit_patterns:
+            m = re.search(pattern, text_lower)
+            if m:
+                requested = m.group(1).strip()
+                # If ISO code is provided directly, keep it.
+                if re.match(r'^[a-z]{2}(?:-[a-z]{2})?$', requested):
+                    return requested.split('-')[0]
+                # Otherwise pass through (e.g. "arabic", "spanish", etc.) to model hint.
+                return requested
+
+        # Script detection helps for short messages where statistical detection is weak.
+        script_lang = self._detect_script_language(text)
+        if script_lang:
+            return script_lang
+
+        # Dynamic language detection from input text when langdetect is available.
+        if LANGDETECT_AVAILABLE and len(text) >= 4:
+            try:
+                detected = detect(text)
+                if detected:
+                    return detected
+            except LangDetectException:
+                pass
+
+        if session and session.preferred_language:
+            return session.preferred_language
+
+        return self._language_from_context()
+
+    def _is_language_switch_request(self, message):
+        """Check if message is purely a language-switch command (not a new question)."""
+        text = (message or '').strip()
+        if not text or len(text) > 120:
+            return False
+        for pattern in _LANG_SWITCH_PATTERNS:
+            if pattern.search(text):
+                _logger.info('[Language Switch] Detected language switch: "%s" matched pattern %s', text, pattern.pattern)
+                return True
+        return False
+
+    def _get_previous_assistant_response(self, session):
+        """Get the last assistant response from the session."""
+        Message = request.env['perfecthr.chatbot.message'].sudo()
+        last_msg = Message.search([
+            ('session_id', '=', session.id),
+            ('role', '=', 'assistant'),
+        ], order='id desc', limit=1)
+        if last_msg:
+            return last_msg.content
+        return None
+
+    def _trim_article_content(self, text, max_chars=8000):
+        """Clip article text to keep within context window while preserving structure.
+
+        Default increased to 8000 chars — Mistral 7B handles ~24K chars (8K tokens).
+        No artificial word limitations.
+        """
+        if not text:
+            return ''
+        cleaned = (text or '').strip()
+        if len(cleaned) <= max_chars:
+            return cleaned
+        # Try to cut at line boundary for cleaner prompt context.
+        clipped = cleaned[:max_chars]
+        last_break = clipped.rfind('\n')
+        if last_break > int(max_chars * 0.65):
+            clipped = clipped[:last_break]
+        return f"{clipped}\n..."
+
     def _infer_target_categories(self, query, intent):
         """Infer relevant KB categories from query and detected intent."""
         query_lower = (query or '').lower()
@@ -113,7 +245,9 @@ class PerfectHRChatbotController(http.Controller):
         if intent == 'pricing' or any(k in query_lower for k in ['price', 'pricing', 'cost', 'package', 'plan']):
             categories.append('pricing')
         if intent in ('product_inquiry', 'support') or any(
-            k in query_lower for k in ['payroll', 'attendance', 'leave', 'recruit', 'module', 'feature']
+            k in query_lower for k in ['payroll', 'attendance', 'leave', 'recruit', 'module', 'feature',
+                                        'crm', 'sales', 'expense', 'analytics', 'reporting', 'task',
+                                        'project', 'employee', 'management']
         ):
             categories.append('product')
         if any(k in query_lower for k in ['faq', 'question', 'how to', 'how do', 'why', 'what is']):
@@ -132,15 +266,14 @@ class PerfectHRChatbotController(http.Controller):
         return sum(1 for word in query_words if len(word) > 2 and word in haystack)
 
     def _tokenize(self, text):
-        """Normalize text into comparable lowercase tokens."""
+        """Normalize text into comparable lowercase tokens, supporting Unicode."""
         stopwords = {
-            'the', 'and', 'for', 'with', 'that', 'this', 'from', 'about', 'what', 'which',
-            'tell', 'please', 'could', 'would', 'should', 'into', 'your', 'their', 'have',
-            'has', 'had', 'its', 'it', 'all', 'any', 'are', 'was', 'were', 'our', 'you',
-            'can', 'how', 'why', 'when', 'where', 'who', 'whom', 'module', 'modules',
+            'the', 'is', 'at', 'which', 'on', 'for', 'a', 'an', 'and', 'or', 'to', 'in', 'of',
+            'with', 'about', 'how', 'what', 'why', 'when', 'can', 'do', 'does', 'please',
+            'el', 'la', 'los', 'las', 'en', 'para', 'como', 'que', 'por'  # basic multi-lingual
         }
         return [
-            token for token in re.findall(r'[a-z0-9]+', (text or '').lower())
+            token for token in re.findall(r'\w+', (text or '').lower(), re.UNICODE)
             if len(token) > 2 and token not in stopwords
         ]
 
@@ -153,6 +286,11 @@ class PerfectHRChatbotController(http.Controller):
             'leave': ['leave', 'vacation', 'timeoff', 'holiday'],
             'recruitment': ['recruitment', 'recruit', 'hiring', 'candidate', 'interview'],
             'performance': ['performance', 'kpi', 'appraisal'],
+            'crm': ['crm', 'customer', 'relationship'],
+            'sales': ['sales', 'sale', 'selling'],
+            'expenses': ['expense', 'expenses', 'reimbursement'],
+            'analytics': ['analytics', 'reporting', 'report', 'dashboard'],
+            'task': ['task', 'project', 'project management'],
             'pricing': ['pricing', 'price', 'plan', 'package', 'cost', 'subscription'],
             'overview': ['overview', 'about', 'explain', 'functionalities', 'features'],
         }
@@ -187,7 +325,8 @@ class PerfectHRChatbotController(http.Controller):
                     module_bonus += 0.12
                 if signal == 'pricing' and category == 'pricing':
                     module_bonus += 0.3
-                if signal in ('payroll', 'attendance', 'leave', 'recruitment', 'performance') and category == 'product':
+                if signal in ('payroll', 'attendance', 'leave', 'recruitment', 'performance',
+                              'crm', 'sales', 'expenses', 'analytics', 'task') and category == 'product':
                     module_bonus += 0.08
 
         total = semantic_score * 0.45 + keyword_score + category_bonus + module_bonus
@@ -219,36 +358,57 @@ class PerfectHRChatbotController(http.Controller):
                         'content': art.content,
                         'content_summary': art.content_summary or '',
                         'category': art.category,
+                        'version': art.version,
                     }
                     if art.embedding_data:
                         data['embedding_data'] = art.embedding_data
                     article_data.append(data)
                     article_map[art.id] = data
 
-                # Load persisted index first to avoid rebuilding on every request.
+                # Load persisted index — do NOT rebuild inline to avoid blocking.
                 if rag_service._index is None:
                     rag_service._load_index()
 
-                # Rebuild only when index is missing/empty.
+                # Only rebuild from pre-computed embeddings (fast operation).
+                # This will NOT call Ollama for embedding — articles without
+                # embeddings are skipped and included only via keyword fallback.
                 if (
                     rag_service._index is None
                     or rag_service._index.ntotal == 0
+                    or not rag_service.is_index_synced(article_data)
                 ):
                     rag_service.build_index(article_data)
 
             # Search
-            semantic_results = rag_service.search(query, top_k=8)
+            semantic_results = rag_service.search(query, top_k=10)
             semantic_by_id = {item.get('id'): item for item in semantic_results if item.get('id')}
+            semantic_ids = set(semantic_by_id.keys())
+
+            # Build a smaller candidate set for ranking to reduce per-request latency.
+            shortlist_ids = set(semantic_ids)
+            if query_tokens:
+                for article in article_data:
+                    name = (article.get('name') or '').lower()
+                    summary = (article.get('content_summary') or '').lower()
+                    content = (article.get('content') or '').lower()
+                    if any(token in name or token in summary or token in content for token in query_tokens):
+                        shortlist_ids.add(article['id'])
+                    if len(shortlist_ids) >= 30:
+                        break
+            if not shortlist_ids:
+                shortlist_ids = set(a['id'] for a in article_data[:30])
 
             candidates = []
             for article in article_data:
+                if article['id'] not in shortlist_ids:
+                    continue
                 semantic_item = semantic_by_id.get(article['id'], {})
                 candidate = {
                     'id': article['id'],
                     'name': article['name'],
                     'category': article.get('category', 'general'),
                     'summary': (semantic_item.get('summary') or article.get('content_summary') or '').strip(),
-                    'content': semantic_item.get('content') or article.get('content', '')[:1800],
+                    'content': semantic_item.get('content') or article.get('content', ''),
                     'semantic_score': float(semantic_item.get('score', 0.0)),
                 }
                 rank_info = self._compute_article_rank(
@@ -261,25 +421,39 @@ class PerfectHRChatbotController(http.Controller):
                 candidate.update(rank_info)
                 candidates.append(candidate)
 
-            candidates = [c for c in candidates if c.get('total', 0.0) > 0.05]
             if candidates:
                 candidates.sort(key=lambda item: item['total'], reverse=True)
-                top_results = candidates[:3]
+                top_results = candidates[:5]
 
                 context_parts = []
                 sources = []
-                for r in top_results:
+                context_char_budget = 16000
+                used_chars = 0
+                for idx, r in enumerate(top_results):
                     summary = (r.get('summary') or '').strip()
                     if not summary:
                         first_line = next((ln.strip() for ln in (r.get('content', '') or '').splitlines() if ln.strip()), '')
                         summary = first_line or 'No summary provided.'
+
+                    # Tiered content budget: top-1 gets full, 2-3 get 6000, 4-5 get summary only
+                    if idx == 0:
+                        clipped_content = self._trim_article_content(r.get('content', ''), max_chars=12000)
+                    elif idx <= 2:
+                        clipped_content = self._trim_article_content(r.get('content', ''), max_chars=6000)
+                    else:
+                        clipped_content = summary
+
                     category = r.get('category', 'general')
-                    context_parts.append(
+                    block = (
                         f"[Article: {r['name']}]\n"
                         f"Category: {category}\n"
                         f"Summary: {summary}\n"
-                        f"Content:\n{r['content']}"
+                        f"Content:\n{clipped_content}"
                     )
+                    if used_chars + len(block) > context_char_budget and context_parts:
+                        break
+                    context_parts.append(block)
+                    used_chars += len(block)
                     sources.append({
                         'id': r['id'],
                         'name': r['name'],
@@ -307,7 +481,7 @@ class PerfectHRChatbotController(http.Controller):
 
         return '', [], {'strong_match': False, 'best_score': 0.0, 'matched_categories': []}
 
-    def _build_rule_based_reply(self, query, context_text, rag_sources):
+    def _build_rule_based_reply(self, query, context_text, rag_sources, response_language='en'):
         """Last-resort fallback when all model generation attempts fail."""
         if not context_text:
             return (
@@ -341,8 +515,6 @@ class PerfectHRChatbotController(http.Controller):
             )
 
         query_lower = (query or '').lower()
-        query_tokens = self._tokenize(query)
-        module_signals = self._extract_module_signals(query)
         employee_match = re.search(r'(\d{1,5})\s*(employees|employee|staff|people)', query_lower)
         employee_count = int(employee_match.group(1)) if employee_match else None
 
@@ -402,64 +574,14 @@ class PerfectHRChatbotController(http.Controller):
                     "Recommendation: start with this plan and adjust after a 30-day pilot based on adoption and support needs."
                 )
 
-        # General synthesis fallback.
-        def article_priority(article):
-            title = (article.get('title') or '').lower()
-            summary = (article.get('summary') or '').lower()
-            content = (article.get('content') or '').lower()
-            title_hits = sum(1 for token in query_tokens if token in title)
-            summary_hits = sum(1 for token in query_tokens if token in summary)
-            content_hits = sum(1 for token in query_tokens if token in content)
-            signal_hits = sum(1 for signal in module_signals if signal in title)
-            return title_hits * 0.7 + summary_hits * 0.25 + content_hits * 0.08 + signal_hits * 1.2
-
-        parsed_articles.sort(key=article_priority, reverse=True)
+        # Return full content from the best-matched article.
         primary = parsed_articles[0]
+        summary_text = primary['summary'] if primary['summary'] else 'Here is what I found:'
 
-        lines = [ln.strip() for ln in primary['content'].splitlines() if ln.strip()]
-        feature_mode = False
-        benefit_mode = False
-        feature_lines = []
-        benefit_lines = []
-        general_lines = []
-        for ln in lines:
-            lower_ln = ln.lower()
-            if lower_ln.startswith('features:'):
-                feature_mode = True
-                benefit_mode = False
-                continue
-            if lower_ln.startswith('benefits:'):
-                benefit_mode = True
-                feature_mode = False
-                continue
-            if re.match(r'^[a-z ]+:$', lower_ln):
-                feature_mode = False
-                benefit_mode = False
-                continue
-            cleaned = ln.lstrip('-').strip()
-            if ln.startswith('-') and feature_mode:
-                feature_lines.append(cleaned)
-            elif ln.startswith('-') and benefit_mode:
-                benefit_lines.append(cleaned)
-            elif len(general_lines) < 3 and not ln.startswith('-'):
-                general_lines.append(cleaned)
-
-        bullet_lines = (feature_lines or [
-            ln.strip().lstrip('-').strip()
-            for ln in primary['content'].splitlines()
-            if ln.strip().startswith('-')
-        ])[:10]
-        bullets = '\n'.join(f"- {line}" for line in bullet_lines)
-        benefits = '\n'.join(f"- {line}" for line in benefit_lines[:5]) if benefit_lines else ''
-        source_names = ', '.join(src['name'] for src in rag_sources[:2]) if rag_sources else primary['title']
-        summary_text = primary['summary'] or (general_lines[0] if general_lines else 'This module focuses on the requested topic.')
         return (
-            f"Based on our {primary['category']} knowledge, here is a detailed answer:\n\n"
-            f"Overview: {summary_text}\n\n"
-            f"Core capabilities:\n{bullets}\n\n"
-            f"Business value:\n{benefits if benefits else '- Improves operational efficiency and process visibility.'}\n\n"
-            "If you share your company size or use case, I can tailor a more specific recommendation.\n\n"
-            f"Sources: {source_names}"
+            f"{summary_text}\n\n"
+            f"{primary['content']}\n\n"
+            "For more specific recommendations, please contact our support team."
         )
 
     def _build_handover_reply(self):
@@ -480,6 +602,7 @@ class PerfectHRChatbotController(http.Controller):
         Session = request.env['perfecthr.chatbot.session'].sudo()
 
         # Create session
+        preferred_language = self._language_from_context()
         session = Session.create({
             'session_token': str(uuid.uuid4()),
             'visitor_ip': request.httprequest.remote_addr,
@@ -487,6 +610,7 @@ class PerfectHRChatbotController(http.Controller):
                 'User-Agent', ''
             )[:255],
             'source': 'website',
+            'preferred_language': preferred_language,
         })
 
         # Create greeting message
@@ -527,6 +651,11 @@ class PerfectHRChatbotController(http.Controller):
         detector = IntentDetector()
         intent_result = detector.detect(message)
 
+        # Detect response language
+        response_language = self._infer_response_language(message, session)
+        if response_language and session.preferred_language != response_language:
+            session.write({'preferred_language': response_language})
+
         # Save user message
         user_msg = Message.create({
             'session_id': session.id,
@@ -560,13 +689,103 @@ class PerfectHRChatbotController(http.Controller):
                 'session_state': 'escalated',
             }
 
+        # ── Handle language-switch requests ──
+        # When the user just asks to switch language (e.g. "বাংলায় বলুন", "respond in Spanish"),
+        # re-use the previous answer and translate it instead of doing a
+        # fresh RAG search that returns a random article.
+        is_lang_switch = self._is_language_switch_request(message)
+        _logger.info(
+            '[Language] message="%s", detected_lang="%s", is_switch=%s',
+            message[:80], response_language, is_lang_switch,
+        )
+
+        if is_lang_switch:
+            prev_response = self._get_previous_assistant_response(session)
+            if prev_response:
+                ai_engine = self._get_ai_engine(config)
+
+                # Map ISO codes to full language names for clearer prompts
+                lang_name_map = {
+                    'bn': 'Bengali (বাংলা)', 'hi': 'Hindi (हिन्दी)', 'ar': 'Arabic (العربية)',
+                    'es': 'Spanish (Español)', 'fr': 'French (Français)', 'de': 'German (Deutsch)',
+                    'pt': 'Portuguese', 'ru': 'Russian (Русский)', 'zh': 'Chinese (中文)',
+                    'ja': 'Japanese (日本語)', 'ko': 'Korean (한국어)', 'tr': 'Turkish (Türkçe)',
+                    'ur': 'Urdu (اردو)', 'it': 'Italian (Italiano)',
+                }
+                target_lang_display = lang_name_map.get(
+                    response_language, response_language
+                )
+
+                rewrite_prompt = (
+                    f"Your task: Translate the following text into {target_lang_display}.\n\n"
+                    f"Rules:\n"
+                    f"- Translate EVERYTHING into {target_lang_display}\n"
+                    f"- Keep the same structure (bullet points, paragraphs, etc.)\n"
+                    f"- Keep factual information accurate\n"
+                    f"- Do NOT add any commentary or explanation\n"
+                    f"- Output ONLY the translated text\n\n"
+                    f"Text to translate:\n"
+                    f"---\n{prev_response}\n---"
+                )
+
+                _logger.info(
+                    '[Language Switch] Translating previous response to %s (lang=%s)',
+                    target_lang_display, response_language,
+                )
+
+                result = ai_engine.chat(
+                    messages=[{'role': 'user', 'content': rewrite_prompt}],
+                    language_hint=response_language,
+                    max_tokens=config['max_tokens'],
+                )
+
+                if result.get('success') and (result.get('response') or '').strip():
+                    response_text = result['response'].strip()
+                    _logger.info('[Language Switch] Translation successful (%d chars)', len(response_text))
+                else:
+                    # Translation failed — give an informative message instead of
+                    # silently echoing the same English text.
+                    _logger.warning(
+                        '[Language Switch] Translation FAILED for lang=%s, success=%s',
+                        response_language, result.get('success'),
+                    )
+                    response_text = (
+                        f"I apologize, I'm having difficulty translating to {target_lang_display} right now. "
+                        f"Here is the original response:\n\n{prev_response}"
+                    )
+
+                response_time_ms = int((time.time() - start_time) * 1000)
+
+                assistant_msg = Message.create({
+                    'session_id': session.id,
+                    'role': 'assistant',
+                    'content': response_text,
+                    'model_used': result.get('model', config['model_name']),
+                    'response_time_ms': response_time_ms,
+                    'intent': 'language_switch',
+                    'confidence_score': 1.0,
+                })
+
+                return {
+                    'status': 'success',
+                    'response': response_text,
+                    'intent': 'language_switch',
+                    'confidence': 1.0,
+                    'response_time_ms': response_time_ms,
+                    'qualification_score': session.qualification_score,
+                    'is_qualified': session.is_qualified,
+                    'ai_available': True,
+                    'assistant_timestamp': assistant_msg.timestamp.isoformat() if assistant_msg.timestamp else '',
+                    'model_used': result.get('model', config['model_name']),
+                }
+
         # Build conversation history for multi-turn
         history_msgs = Message.search([
             ('session_id', '=', session.id),
-        ], order='timestamp asc', limit=8)
+        ], order='id desc', limit=10)
 
         chat_messages = []
-        for msg in history_msgs:
+        for msg in history_msgs[::-1]:
             if msg.role in ('user', 'assistant'):
                 chat_messages.append({
                     'role': msg.role,
@@ -583,33 +802,40 @@ class PerfectHRChatbotController(http.Controller):
 
         # Generate AI response
         ai_engine = self._get_ai_engine(config)
+
+        # Build response guidance
         response_guidance = (
-            "Answer using the provided article context by synthesizing category, summary, and content. "
-            "Do not copy-paste long lines from the article. Use your own wording, keep it factual, "
-            "and cover the key points completely. For module overview questions, structure your response with: "
-            "Overview, Core Features, Benefits, and Recommended Next Step. "
-            "Keep the answer comprehensive (normally 8-14 bullet-level points when context supports it). "
-            "If context confidence is low, provide best-effort guidance and then offer human follow-up."
+            "Read the provided knowledge base context carefully and synthesize a complete, natural answer to the user's question. "
+            "Use your own words instead of directly copying the articles. "
+            "Address all aspects of the user's query comprehensively, including relevant features, pricing, or benefits found in the context. "
+            "Be helpful, professional, and conversational."
         )
+
         effective_context = context_text
         if not match_meta.get('strong_match'):
             effective_context = (
                 (context_text + "\n\n") if context_text else ""
             ) + "[Context Confidence]\nLow confidence match."
 
-        chat_messages_with_guidance = [
-            {'role': 'system', 'content': response_guidance},
-            *chat_messages,
-        ]
-        result = ai_engine.chat(chat_messages_with_guidance, context_text=effective_context)
+        result = ai_engine.chat(
+            chat_messages,
+            context_text=effective_context,
+            max_tokens=config['max_tokens'],
+            language_hint=response_language,
+            response_guidance=response_guidance,
+        )
 
-        if not result.get('success', True):
-            # If model fails, return deterministic KB synthesis immediately.
-            result['response'] = self._build_rule_based_reply(
+        if not result.get('success') or not (result.get('response') or '').strip():
+            # Model failed — build a deterministic KB reply directly.
+            # Do NOT make a second AI call (_rewrite_in_language) to avoid
+            # doubling response time in failure scenarios.
+            fallback_text = self._build_rule_based_reply(
                 message,
                 context_text,
                 rag_sources,
+                response_language=response_language,
             )
+            result['response'] = fallback_text
             result['model'] = 'kb_fallback'
 
         response_time_ms = int((time.time() - start_time) * 1000)

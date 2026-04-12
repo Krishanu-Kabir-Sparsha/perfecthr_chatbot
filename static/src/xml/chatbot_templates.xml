@@ -133,6 +133,9 @@
                                 <span class="phr-typing-dot"/>
                                 <span class="phr-typing-dot"/>
                             </div>
+                            <div t-if="state.longWaitMessage" class="phr-long-wait-text">
+                                <t t-esc="state.longWaitMessage"/>
+                            </div>
                         </div>
                     </div>
 

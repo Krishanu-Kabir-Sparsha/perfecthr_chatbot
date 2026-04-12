@@ -22,7 +22,7 @@
 
         <record id="config_max_tokens" model="ir.config_parameter">
             <field name="key">perfecthr_chatbot.max_tokens</field>
-            <field name="value">512</field>
+            <field name="value">2048</field>
         </record>
 
         <record id="config_temperature" model="ir.config_parameter">

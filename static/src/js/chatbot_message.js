@@ -37,11 +37,22 @@ function renderMessageHtml(content) {
     const lines = text.split('\n');
     const html = [];
     let inList = false;
+    let listTag = null;
 
     const closeList = () => {
         if (inList) {
-            html.push('</ul>');
+            html.push(listTag === 'ol' ? '</ol>' : '</ul>');
             inList = false;
+            listTag = null;
+        }
+    };
+
+    const openList = (tagName) => {
+        if (!inList || listTag !== tagName) {
+            closeList();
+            html.push(tagName === 'ol' ? '<ol>' : '<ul>');
+            inList = true;
+            listTag = tagName;
         }
     };
 
@@ -54,11 +65,15 @@ function renderMessageHtml(content) {
 
         const bulletMatch = line.match(/^[-•*]\s+(.+)$/);
         if (bulletMatch) {
-            if (!inList) {
-                html.push('<ul>');
-                inList = true;
-            }
+            openList('ul');
             html.push(`<li>${formatInline(bulletMatch[1])}</li>`);
+            continue;
+        }
+
+        const numberedMatch = line.match(/^\d+\.\s+(.+)$/);
+        if (numberedMatch) {
+            openList('ol');
+            html.push(`<li>${formatInline(numberedMatch[1])}</li>`);
             continue;
         }
 

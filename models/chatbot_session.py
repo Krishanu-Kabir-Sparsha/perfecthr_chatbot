@@ -40,6 +40,10 @@ class ChatbotSession(models.Model):
     ], string='Employee Size')
     visitor_ip = fields.Char(string='IP Address')
     visitor_user_agent = fields.Char(string='User Agent')
+    preferred_language = fields.Char(
+        string='Preferred Language',
+        help='Language used for AI responses in this session.',
+    )
 
     # ── State ───────────────────────────────────────────────────────
     state = fields.Selection([

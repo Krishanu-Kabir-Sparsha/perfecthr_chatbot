@@ -120,16 +120,33 @@ class RAGService:
         for article in articles:
             embedding = None
 
-            # Try pre-computed embedding first
+            # Use ONLY pre-computed embeddings to avoid blocking user requests.
+            # Articles without embeddings should be embedded via cron or manual action.
             if article.get('embedding_data'):
                 try:
                     embedding = pickle.loads(article['embedding_data'])
                 except Exception:
-                    pass
+                    _logger.warning(
+                        'Failed to deserialize embedding for article %s (id=%s)',
+                        article.get('name', '?'), article.get('id'),
+                    )
 
-            # Generate embedding if not available
             if embedding is None:
-                embedding = self.embed_text(article['content'])
+                _logger.debug(
+                    'Skipping article "%s" (id=%s) — no pre-computed embedding. '
+                    'Run the auto-embed cron or embed manually.',
+                    article.get('name', '?'), article.get('id'),
+                )
+                # Still add to metadata so keyword fallback can find it
+                metadata.append({
+                    'id': article['id'],
+                    'name': article['name'],
+                    'category': article.get('category', 'general'),
+                    'summary': article.get('content_summary', ''),
+                    'version': int(article.get('version', 1) or 1),
+                    'content': article['content'],
+                })
+                continue
 
             if embedding is not None:
                 embeddings.append(embedding)
@@ -138,7 +155,8 @@ class RAGService:
                     'name': article['name'],
                     'category': article.get('category', 'general'),
                     'summary': article.get('content_summary', ''),
-                    'content': article['content'][:1800],  # Balanced context depth vs model latency
+                    'version': int(article.get('version', 1) or 1),
+                    'content': article['content'],  # Preserve full articlesections for complete answers
                 })
 
         if not embeddings:
@@ -243,6 +261,25 @@ class RAGService:
             }
             for score, meta in scored[:top_k]
         ]
+
+    def is_index_synced(self, articles):
+        """Check whether current in-memory metadata matches article ids/versions."""
+        if not self._metadata:
+            return False
+        try:
+            current = {
+                int(m.get('id')): int(m.get('version', 1) or 1)
+                for m in self._metadata
+                if m.get('id')
+            }
+            incoming = {
+                int(a.get('id')): int(a.get('version', 1) or 1)
+                for a in (articles or [])
+                if a.get('id')
+            }
+            return bool(current) and current == incoming
+        except Exception:
+            return False
 
     # ── Persistence ─────────────────────────────────────────────────
     def _save_index(self):
