@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 RAG (Retrieval-Augmented Generation) Service for Perfect HR Chatbot.
 
@@ -182,7 +182,7 @@ class RAGService:
                       'id', 'name', 'content', 'content_summary', 'embedding_data'
         """
         if not self._faiss:
-            _logger.error('Cannot build index: FAISS not available')
+            _logger.info('FAISS not available — using keyword fallback for retrieval')
             return False
 
         embeddings = []

@@ -217,27 +217,49 @@ export class ChatbotWidget extends Component {
         this.state.connectionError = false;
         this._scrollToBottom();
 
-        // Show long-wait message after 8 seconds
+        // Show initial thinking message after 4 seconds
         this._longWaitTimer = setTimeout(() => {
             if (this.state.isTyping) {
-                this.state.longWaitMessage = 'The request is taking longer than expected. Please wait a moment.';
+                this.state.longWaitMessage = 'AI is composing a response...';
             }
-        }, 8000);
+        }, 4000);
 
-        // Send to backend
+        // Send to backend — returns immediately with {status: 'processing'}
         let result = await this.chatService.sendMessage(
             this.state.sessionToken,
             text,
         );
 
+        // Handle session expiry
         if (
             result.status === 'error' &&
-            (result.code === 'timeout' || /invalid or expired session/i.test(result.error || ''))
+            /invalid or expired session/i.test(result.error || '')
         ) {
             const sessionReady = await this._ensureSession(true);
             if (sessionReady && this.state.sessionToken) {
                 result = await this.chatService.sendMessage(this.state.sessionToken, text);
             }
+        }
+
+        // If backend is processing asynchronously, start polling
+        if (result.status === 'processing' && result.user_message_id) {
+            result = await this.chatService.pollForResponse(
+                this.state.sessionToken,
+                result.user_message_id,
+                (elapsedMs) => {
+                    // Update the wait message with elapsed time
+                    const secs = Math.round(elapsedMs / 1000);
+                    if (secs < 30) {
+                        this.state.longWaitMessage = `AI is composing a response... ${secs}s`;
+                    } else if (secs < 120) {
+                        this.state.longWaitMessage = `AI is still working on your answer... ${secs}s`;
+                    } else {
+                        const mins = Math.floor(secs / 60);
+                        const remainSecs = secs % 60;
+                        this.state.longWaitMessage = `AI is processing (${mins}m ${remainSecs}s). Large models take time on first load.`;
+                    }
+                },
+            );
         }
 
         // Clear long-wait timer
@@ -267,8 +289,8 @@ export class ChatbotWidget extends Component {
                 this.state.unreadCount++;
             }
         } else {
-            // Always try history recovery before showing error
-            const recovered = await this._recoverLatestReply(userSentAt, 6, 3000);
+            // Try history recovery as last resort
+            const recovered = await this._recoverLatestReply(userSentAt, 3, 5000);
             if (!recovered) {
                 this.state.messages.push({
                     role: 'assistant',

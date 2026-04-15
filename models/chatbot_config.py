@@ -48,9 +48,11 @@ class ResConfigSettings(models.TransientModel):
         help='URL of the Ollama server (e.g., http://localhost:11434)',
     )
     chatbot_model_name = fields.Selection([
-        ('mistral', 'Mistral 7B'),
-        ('llama3', 'LLaMA 3'),
-        ('phi3', 'Phi-3'),
+        ('mistral', 'Mistral 7B (4.4 GB)'),
+        ('llama3.2', 'LLaMA 3.2 (3B — 2 GB, fast)'),
+        ('phi', 'Phi (2.7B — 1.6 GB, lightweight)'),
+        ('phi3', 'Phi-3 (3.8B — 2.2 GB)'),
+        ('llama3', 'LLaMA 3 (8B — 4.7 GB)'),
     ], string='LLM Model',
         config_parameter='perfecthr_chatbot.model_name',
         default='mistral',

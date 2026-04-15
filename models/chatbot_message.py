@@ -26,6 +26,10 @@ class ChatbotMessage(models.Model):
 
     # ── AI Metadata ─────────────────────────────────────────────────
     intent = fields.Char(string='Detected Intent')
+    detected_language = fields.Char(
+        string='Detected Language',
+        help='Language code detected for this message (e.g. en, bn, ar)',
+    )
     confidence_score = fields.Float(
         string='Confidence',
         digits=(3, 2),

@@ -98,6 +98,9 @@
                                     <field name="timestamp"/>
                                     <field name="role" widget="badge"/>
                                     <field name="content"/>
+                                    <field name="detected_language"
+                                           string="Detected Lang."
+                                           optional="show"/>
                                     <field name="intent"/>
                                     <field name="confidence_score"
                                            widget="progressbar"/>

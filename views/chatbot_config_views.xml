@@ -73,7 +73,8 @@
 
                         <setting id="chatbot_setting_system_prompt" string="System Prompt"
                                  help="Instructions that control the AI's personality and behavior.">
-                            <field name="chatbot_system_prompt" nolabel="1"/>
+                            <field name="chatbot_system_prompt" nolabel="1"
+                                   widget="text"/>
                         </setting>
                     </block>
 

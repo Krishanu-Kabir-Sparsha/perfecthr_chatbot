@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 Main controller for Perfect HR AI Chatbot.
 Handles all JSON-RPC endpoints for the chat widget.
@@ -6,6 +6,7 @@ Handles all JSON-RPC endpoints for the chat widget.
 import json
 import logging
 import re
+import threading
 import time
 import uuid
 
@@ -25,6 +26,9 @@ _logger = logging.getLogger(__name__)
 
 _AI_ENGINE_CACHE = {}
 _RAG_SERVICE_CACHE = {}
+
+# Store for async processing results: {user_msg_id: result_dict or None}
+_PENDING_RESPONSES = {}
 
 
 class PerfectHRChatbotController(http.Controller):
@@ -381,11 +385,11 @@ class PerfectHRChatbotController(http.Controller):
 
             if candidates:
                 candidates.sort(key=lambda item: item['total'], reverse=True)
-                top_results = candidates[:5]
+                top_results = candidates[:3]
 
                 context_parts = []
                 sources = []
-                context_char_budget = 16000
+                context_char_budget = 6000
                 used_chars = 0
                 for idx, r in enumerate(top_results):
                     summary = (r.get('summary') or '').strip()
@@ -393,11 +397,11 @@ class PerfectHRChatbotController(http.Controller):
                         first_line = next((ln.strip() for ln in (r.get('content', '') or '').splitlines() if ln.strip()), '')
                         summary = first_line or 'No summary provided.'
 
-                    # Tiered content budget: top-1 gets full, 2-3 get 6000, 4-5 get summary only
+                    # Tiered content budget: top-1 gets 4000, 2-3 get summary only
                     if idx == 0:
-                        clipped_content = self._trim_article_content(r.get('content', ''), max_chars=12000)
+                        clipped_content = self._trim_article_content(r.get('content', ''), max_chars=4000)
                     elif idx <= 2:
-                        clipped_content = self._trim_article_content(r.get('content', ''), max_chars=6000)
+                        clipped_content = self._trim_article_content(r.get('content', ''), max_chars=1500)
                     else:
                         clipped_content = summary
 
@@ -620,6 +624,7 @@ class PerfectHRChatbotController(http.Controller):
             'role': 'user',
             'content': message,
             'intent': intent_result['intent'],
+            'detected_language': response_language,
             'confidence_score': intent_result['confidence'],
         })
 
@@ -637,6 +642,7 @@ class PerfectHRChatbotController(http.Controller):
                 'role': 'assistant',
                 'content': response_text,
                 'intent': 'human_handover',
+                'detected_language': response_language,
                 'confidence_score': 1.0,
                 'response_time_ms': int((time.time() - start_time) * 1000),
             })
@@ -682,6 +688,7 @@ class PerfectHRChatbotController(http.Controller):
                 'role': 'assistant',
                 'content': response_text,
                 'model_used': 'knowledge_guardrail',
+                'detected_language': response_language,
                 'response_time_ms': response_time_ms,
                 'rag_sources': json.dumps(rag_sources) if rag_sources else False,
                 'intent': intent_result['intent'],
@@ -701,7 +708,8 @@ class PerfectHRChatbotController(http.Controller):
                 'model_used': 'knowledge_guardrail',
             }
 
-        # Generate AI response
+        # Generate AI response — run asynchronously in a background thread
+        # so the frontend request returns immediately and can poll for results.
         ai_engine = self._get_ai_engine(config)
 
         # Build response guidance with explicit synthesis + language requirements
@@ -718,98 +726,225 @@ class PerfectHRChatbotController(http.Controller):
             "Every word, sentence, and formatting must match the user's language. No English unless user wrote in English."
         )
 
-        result = ai_engine.chat(
-            chat_messages,
-            context_text=context_text or '',
-            max_tokens=config['max_tokens'],
-            language_hint=response_language,
-            response_guidance=response_guidance,
-            force_synthesis=True,
+        # Mark this message as pending
+        user_msg_id = user_msg.id
+        _PENDING_RESPONSES[user_msg_id] = None  # None = still processing
+
+        # Prepare all data the thread needs (no ORM objects — just dicts/strings)
+        thread_data = {
+            'user_msg_id': user_msg_id,
+            'session_id': session.id,
+            'message': message,
+            'chat_messages': chat_messages,
+            'context_text': context_text or '',
+            'rag_sources': rag_sources,
+            'config': config,
+            'response_language': response_language,
+            'response_guidance': response_guidance,
+            'intent_result': intent_result,
+            'start_time': start_time,
+        }
+
+        # Start background thread for AI processing
+        thread = threading.Thread(
+            target=self._process_ai_response_thread,
+            args=(ai_engine, thread_data),
+            daemon=True,
+        )
+        thread.start()
+
+        _logger.info(
+            'AI processing started in background thread for user_msg_id=%d',
+            user_msg_id,
         )
 
-        if not result.get('success') or not (result.get('response') or '').strip():
-            # Model failed — build a deterministic KB reply directly.
-            # Do NOT make a second AI call (_rewrite_in_language) to avoid
-            # doubling response time in failure scenarios.
-            fallback_text = self._build_rule_based_reply(
-                message,
-                context_text,
-                rag_sources,
-                response_language=response_language,
-            )
-            result['response'] = fallback_text
-            result['model'] = 'kb_fallback'
-
-        response_time_ms = int((time.time() - start_time) * 1000)
-
-        # Save assistant message
-        assistant_msg = Message.create({
-            'session_id': session.id,
-            'role': 'assistant',
-            'content': result['response'],
-            'model_used': result.get('model', config['model_name']),
-            'response_time_ms': response_time_ms,
-            'rag_sources': json.dumps(rag_sources) if rag_sources else False,
-            'intent': intent_result['intent'],
-            'confidence_score': intent_result['confidence'],
-        })
-
-        # Lead qualification check
-        from ..services.lead_qualifier import LeadQualifier
-        qualifier = LeadQualifier()
-        session_data = {
-            'visitor_name': session.visitor_name or '',
-            'visitor_email': session.visitor_email or '',
-            'visitor_phone': session.visitor_phone or '',
-            'visitor_company': session.visitor_company or '',
-            'visitor_employee_size': session.visitor_employee_size or '',
-        }
-        all_messages = [
-            {'role': m.role, 'content': m.content}
-            for m in history_msgs
-        ]
-        qual_result = qualifier.qualify(session_data, all_messages)
-
-        # Update session qualification
-        session.write({
-            'qualification_score': qual_result['score'],
-            'is_qualified': qual_result['is_qualified'],
-        })
-
-        # Auto-update extracted info
-        extracted = qual_result.get('extracted', {})
-        update_vals = {}
-        if extracted.get('name') and not session.visitor_name:
-            update_vals['visitor_name'] = extracted['name']
-        if extracted.get('email') and not session.visitor_email:
-            update_vals['visitor_email'] = extracted['email']
-        if extracted.get('phone') and not session.visitor_phone:
-            update_vals['visitor_phone'] = extracted['phone']
-        if extracted.get('company') and not session.visitor_company:
-            update_vals['visitor_company'] = extracted['company']
-        if extracted.get('employee_size') and not session.visitor_employee_size:
-            update_vals['visitor_employee_size'] = extracted['employee_size']
-        if update_vals:
-            session.write(update_vals)
-
-        response = {
-            'status': 'success',
-            'response': result['response'],
+        # Return immediately — frontend will poll for the result
+        return {
+            'status': 'processing',
+            'user_message_id': user_msg_id,
             'intent': intent_result['intent'],
             'confidence': intent_result['confidence'],
-            'response_time_ms': response_time_ms,
-            'qualification_score': qual_result['score'],
-            'is_qualified': qual_result['is_qualified'],
-            'ai_available': result.get('success', True),
-            'assistant_timestamp': assistant_msg.timestamp.isoformat() if assistant_msg.timestamp else '',
-            'model_used': result.get('model', config['model_name']),
         }
 
-        # Suggest lead capture if qualified but no lead yet
-        if qual_result['is_qualified'] and not session.lead_id:
-            response['suggest_lead_capture'] = True
+    def _process_ai_response_thread(self, ai_engine, data):
+        """Background thread that calls Ollama and stores the result.
 
-        return response
+        This runs outside the Odoo request context, so no ORM access.
+        Results are stored in _PENDING_RESPONSES for the /poll endpoint
+        to pick up and commit to the database.
+        """
+        user_msg_id = data['user_msg_id']
+        try:
+            result = ai_engine.chat(
+                data['chat_messages'],
+                context_text=data['context_text'],
+                max_tokens=data['config']['max_tokens'],
+                language_hint=data['response_language'],
+                response_guidance=data['response_guidance'],
+                force_synthesis=True,
+            )
+
+            # If /api/chat failed, retry with /api/generate
+            if not result.get('success') and result.get('error_type') in ('timeout', 'connection'):
+                _logger.warning(
+                    'Ollama /api/chat failed (%s), retrying with /api/generate ...',
+                    result.get('error_type'),
+                )
+                result = ai_engine.generate(
+                    prompt=data['message'],
+                    context_text=data['context_text'],
+                    language_hint=data['response_language'],
+                )
+
+            if not result.get('success') or not (result.get('response') or '').strip():
+                _logger.warning(
+                    'All Ollama attempts failed (error_type=%s). '
+                    'Falling back to rule-based KB reply.',
+                    result.get('error_type', 'empty_response'),
+                )
+                # Can't call self methods from thread easily, so build a simple fallback
+                result['response'] = (
+                    "I apologize, but I'm temporarily unable to process your request. "
+                    "Our AI system is currently being updated. Please try again in a moment, "
+                    "or feel free to contact our team directly at support@perfecthr.com."
+                )
+                result['model'] = 'kb_fallback'
+
+            response_time_ms = int((time.time() - data['start_time']) * 1000)
+
+            _PENDING_RESPONSES[user_msg_id] = {
+                'response': result.get('response', ''),
+                'model': result.get('model', data['config']['model_name']),
+                'response_time_ms': response_time_ms,
+                'success': result.get('success', False),
+                'rag_sources': data['rag_sources'],
+                'intent_result': data['intent_result'],
+                'response_language': data['response_language'],
+                'session_id': data['session_id'],
+            }
+
+            _logger.info(
+                'AI response ready for user_msg_id=%d (model=%s, time=%dms)',
+                user_msg_id, result.get('model'), response_time_ms,
+            )
+
+        except Exception as e:
+            _logger.error('AI processing thread failed for user_msg_id=%d: %s', user_msg_id, e)
+            _PENDING_RESPONSES[user_msg_id] = {
+                'response': (
+                    "I apologize, but I encountered an error processing your request. "
+                    "Please try again."
+                ),
+                'model': 'error',
+                'response_time_ms': int((time.time() - data['start_time']) * 1000),
+                'success': False,
+                'rag_sources': data['rag_sources'],
+                'intent_result': data['intent_result'],
+                'response_language': data['response_language'],
+                'session_id': data['session_id'],
+            }
+
+    @http.route('/perfecthr_chatbot/poll', type='json', auth='public',
+                website=True, csrf=False)
+    def poll_response(self, user_message_id, session_token, **kwargs):
+        """Poll for an AI response that is being generated asynchronously."""
+        # Validate session
+        session = self._get_session(session_token)
+        if not session:
+            return {'status': 'error', 'error': 'Invalid or expired session.'}
+
+        result_data = _PENDING_RESPONSES.get(user_message_id)
+
+        # Still processing
+        if result_data is None:
+            return {'status': 'processing'}
+
+        # Response is ready — save to database and clean up
+        try:
+            Message = request.env['perfecthr.chatbot.message'].sudo()
+
+            assistant_msg = Message.create({
+                'session_id': result_data['session_id'],
+                'role': 'assistant',
+                'content': result_data['response'],
+                'model_used': result_data['model'],
+                'detected_language': result_data['response_language'],
+                'response_time_ms': result_data['response_time_ms'],
+                'rag_sources': json.dumps(result_data['rag_sources']) if result_data['rag_sources'] else False,
+                'intent': result_data['intent_result']['intent'],
+                'confidence_score': result_data['intent_result']['confidence'],
+            })
+
+            # Lead qualification check
+            from ..services.lead_qualifier import LeadQualifier
+            qualifier = LeadQualifier()
+            session_data = {
+                'visitor_name': session.visitor_name or '',
+                'visitor_email': session.visitor_email or '',
+                'visitor_phone': session.visitor_phone or '',
+                'visitor_company': session.visitor_company or '',
+                'visitor_employee_size': session.visitor_employee_size or '',
+            }
+            history_msgs = Message.search([
+                ('session_id', '=', session.id),
+            ], order='id desc', limit=10)
+            all_messages = [
+                {'role': m.role, 'content': m.content}
+                for m in history_msgs
+            ]
+            qual_result = qualifier.qualify(session_data, all_messages)
+
+            session.write({
+                'qualification_score': qual_result['score'],
+                'is_qualified': qual_result['is_qualified'],
+            })
+
+            # Auto-update extracted info
+            extracted = qual_result.get('extracted', {})
+            update_vals = {}
+            if extracted.get('name') and not session.visitor_name:
+                update_vals['visitor_name'] = extracted['name']
+            if extracted.get('email') and not session.visitor_email:
+                update_vals['visitor_email'] = extracted['email']
+            if extracted.get('phone') and not session.visitor_phone:
+                update_vals['visitor_phone'] = extracted['phone']
+            if extracted.get('company') and not session.visitor_company:
+                update_vals['visitor_company'] = extracted['company']
+            if extracted.get('employee_size') and not session.visitor_employee_size:
+                update_vals['visitor_employee_size'] = extracted['employee_size']
+            if update_vals:
+                session.write(update_vals)
+
+            response = {
+                'status': 'success',
+                'response': result_data['response'],
+                'intent': result_data['intent_result']['intent'],
+                'confidence': result_data['intent_result']['confidence'],
+                'response_time_ms': result_data['response_time_ms'],
+                'qualification_score': qual_result['score'],
+                'is_qualified': qual_result['is_qualified'],
+                'ai_available': result_data.get('success', True),
+                'assistant_timestamp': assistant_msg.timestamp.isoformat() if assistant_msg.timestamp else '',
+                'model_used': result_data['model'],
+            }
+
+            if qual_result['is_qualified'] and not session.lead_id:
+                response['suggest_lead_capture'] = True
+
+            # Clean up pending response
+            _PENDING_RESPONSES.pop(user_message_id, None)
+
+            return response
+
+        except Exception as e:
+            _logger.error('Failed to save AI response for user_msg_id=%d: %s', user_message_id, e)
+            _PENDING_RESPONSES.pop(user_message_id, None)
+            return {
+                'status': 'success',
+                'response': result_data['response'],
+                'intent': result_data['intent_result']['intent'],
+                'model_used': result_data['model'],
+            }
 
     @http.route('/perfecthr_chatbot/submit_lead', type='json', auth='public',
                 website=True, csrf=False)

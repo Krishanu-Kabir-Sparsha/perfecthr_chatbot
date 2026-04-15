@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 Ollama AI Engine — Exclusive LLM integration for Perfect HR Chatbot.
 
@@ -32,15 +32,15 @@ class OllamaEngine:
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.system_prompt = system_prompt
-        self._generation_timeout = 60
+        self._connect_timeout = 10
+        self._read_timeout = 500
         self._embedding_timeout = 60
         self._retry_count = 2
-        self._retry_delay = 1
+        self._retry_delay = 3
         self._resolved_model = None
         self._last_model_refresh = 0
         self._model_refresh_ttl = 120
         self._model_lock = threading.Lock()
-        self._session = requests.Session()
 
     def _resolve_model_name(self, force=False):
         """Resolve configured model to an installed Ollama tag (e.g. mistral -> mistral:latest)."""
@@ -53,7 +53,7 @@ class OllamaEngine:
             if not force and self._resolved_model and (now - self._last_model_refresh) < self._model_refresh_ttl:
                 return self._resolved_model
             try:
-                resp = self._session.get(f'{self.ollama_url}/api/tags', timeout=8)
+                resp = requests.get(f'{self.ollama_url}/api/tags', timeout=8)
                 resp.raise_for_status()
                 names = [m.get('name', '') for m in resp.json().get('models', [])]
                 exact = next((n for n in names if n == self.model), None)
@@ -66,13 +66,45 @@ class OllamaEngine:
                 self._last_model_refresh = now
             return self._resolved_model
 
+    # ── Warm-up / Preload ───────────────────────────────────────────
+    def warm_up(self):
+        """Pre-load the model into Ollama memory.
+
+        Uses a streaming request with num_predict=1 so:
+        - Model gets loaded into memory
+        - Response is immediate (1 token)
+        - Connection closes quickly, not blocking other requests.
+        """
+        model_name = self._resolve_model_name()
+        try:
+            _logger.info('Warming up Ollama model %s ...', model_name)
+            resp = requests.post(
+                f'{self.ollama_url}/api/generate',
+                json={
+                    'model': model_name,
+                    'prompt': 'Hi',
+                    'stream': True,
+                    'keep_alive': '10m',
+                    'options': {'num_predict': 1},
+                },
+                timeout=(self._connect_timeout, self._read_timeout),
+                stream=True,
+            )
+            # Consume the stream to properly close the connection
+            for line in resp.iter_lines():
+                pass
+            resp.close()
+            _logger.info('Ollama model %s is warm and ready.', model_name)
+        except Exception as e:
+            _logger.warning('Ollama warm-up failed (non-fatal): %s', e)
+
     # ── Health Check ────────────────────────────────────────────────
     def is_available(self):
         """Check if Ollama server is reachable."""
         try:
             resp = requests.get(
                 f'{self.ollama_url}/api/tags',
-                timeout=5,
+                timeout=(3, 5),
             )
             return resp.status_code == 200
         except Exception:
@@ -81,9 +113,9 @@ class OllamaEngine:
     def list_models(self):
         """List available models on the Ollama server."""
         try:
-            resp = self._session.get(
+            resp = requests.get(
                 f'{self.ollama_url}/api/tags',
-                timeout=10,
+                timeout=(5, 10),
             )
             resp.raise_for_status()
             data = resp.json()
@@ -96,10 +128,10 @@ class OllamaEngine:
         """Get info about the current model."""
         try:
             model = self._resolve_model_name()
-            resp = self._session.post(
+            resp = requests.post(
                 f'{self.ollama_url}/api/show',
                 json={'name': model},
-                timeout=10,
+                timeout=(5, 10),
             )
             resp.raise_for_status()
             return resp.json()
@@ -338,13 +370,13 @@ class OllamaEngine:
         embed_model = model or 'nomic-embed-text'
         # Prefer current Ollama embedding endpoint.
         try:
-            resp = self._session.post(
+            resp = requests.post(
                 f'{self.ollama_url}/api/embed',
                 json={
                     'model': embed_model,
                     'input': text,
                 },
-                timeout=self._embedding_timeout,
+                timeout=(self._connect_timeout, self._embedding_timeout),
             )
             resp.raise_for_status()
             data = resp.json()
@@ -358,13 +390,13 @@ class OllamaEngine:
 
         # Legacy fallback endpoint.
         try:
-            resp = self._session.post(
+            resp = requests.post(
                 f'{self.ollama_url}/api/embeddings',
                 json={
                     'model': embed_model,
                     'prompt': text,
                 },
-                timeout=self._embedding_timeout,
+                timeout=(self._connect_timeout, self._embedding_timeout),
             )
             resp.raise_for_status()
             data = resp.json()
@@ -375,45 +407,91 @@ class OllamaEngine:
 
     # ── Internal ────────────────────────────────────────────────────
     def _send_request(self, endpoint, payload):
-        """Send request to Ollama with retry logic."""
+        """Send request to Ollama using STREAMING mode.
+
+        Streaming keeps the TCP connection alive with incremental data,
+        preventing read timeouts that plague non-streaming mode when
+        models take a long time to load or generate.
+        """
         start_time = time.time()
 
+        # Force streaming — this is the key fix.
+        payload = dict(payload)
+        payload['stream'] = True
+
         for attempt in range(self._retry_count):
+            resp = None
             try:
-                resp = self._session.post(
+                _logger.info(
+                    'Ollama %s request (attempt %d/%d, model=%s)',
+                    endpoint, attempt + 1, self._retry_count,
+                    payload.get('model', self.model),
+                )
+                resp = requests.post(
                     f'{self.ollama_url}{endpoint}',
                     json=payload,
-                    timeout=self._generation_timeout,
+                    timeout=(self._connect_timeout, self._read_timeout),
+                    stream=True,
                 )
                 resp.raise_for_status()
-                data = resp.json()
 
+                # Collect streamed response chunks
+                response_text = ''
+                model_name = self.model
+                for line in resp.iter_lines(decode_unicode=True):
+                    if not line:
+                        continue
+                    try:
+                        chunk = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    # /api/chat streams {message: {content: "..."}}
+                    if 'message' in chunk:
+                        response_text += chunk['message'].get('content', '')
+                    # /api/generate streams {response: "..."}
+                    elif 'response' in chunk:
+                        response_text += chunk.get('response', '')
+
+                    if chunk.get('model'):
+                        model_name = chunk['model']
+
+                    # Done flag — final chunk
+                    if chunk.get('done'):
+                        break
+
+                resp.close()
                 elapsed_ms = int((time.time() - start_time) * 1000)
 
-                # /api/chat returns 'message.content', /api/generate returns 'response'
-                response_text = ''
-                if 'message' in data:
-                    response_text = data['message'].get('content', '')
-                elif 'response' in data:
-                    response_text = data['response']
+                _logger.info(
+                    'Ollama response received in %dms (model=%s, chars=%d)',
+                    elapsed_ms, model_name, len(response_text),
+                )
 
                 return {
                     'response': response_text.strip(),
-                    'model': data.get('model', self.model),
+                    'model': model_name,
                     'duration_ms': elapsed_ms,
                     'success': True,
                     'error_type': None,
                 }
 
-            except requests.ConnectionError:
+            except requests.ConnectionError as e:
                 _logger.warning(
-                    'Ollama connection attempt %d/%d failed',
-                    attempt + 1, self._retry_count,
+                    'Ollama connection attempt %d/%d failed: %s',
+                    attempt + 1, self._retry_count, e,
                 )
                 if attempt < self._retry_count - 1:
                     time.sleep(self._retry_delay)
-            except requests.Timeout:
-                _logger.error('Ollama request timed out after %ds', self._generation_timeout)
+            except requests.Timeout as e:
+                _logger.warning(
+                    'Ollama request timed out (attempt %d/%d): %s',
+                    attempt + 1, self._retry_count, e,
+                )
+                if attempt < self._retry_count - 1:
+                    time.sleep(self._retry_delay)
+                    continue
+                _logger.error('Ollama timed out after all %d attempts', self._retry_count)
                 return {
                     'response': FALLBACK_MESSAGE,
                     'model': self.model,
@@ -423,8 +501,7 @@ class OllamaEngine:
                 }
             except requests.HTTPError as e:
                 _logger.error('Ollama HTTP error: %s', e)
-                # Check if model not found
-                if e.response and e.response.status_code == 404:
+                if e.response is not None and e.response.status_code == 404:
                     self._resolve_model_name(force=True)
                     return {
                         'response': (
@@ -452,6 +529,13 @@ class OllamaEngine:
                     'success': False,
                     'error_type': 'unknown',
                 }
+            finally:
+                # Always close the response to free the TCP connection
+                if resp is not None:
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
 
         # All retries exhausted
         elapsed_ms = int((time.time() - start_time) * 1000)
